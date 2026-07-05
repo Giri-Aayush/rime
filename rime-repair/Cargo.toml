@@ -1,0 +1,16 @@
+[package]
+name = "rime-repair"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# NOTE (planned Jul 7): this crate will depend on frost-core 2.2.0 and
+# reddsa 0.5.1 — the exact versions frost-tools pins — because the
+# Repairable Threshold Scheme and share refresh are library-only APIs
+# (frost_core::keys::{repairable, refresh}); frost-client exposes no CLI
+# for them. Deps deferred so the day-1 workspace builds fast.
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true

@@ -1,0 +1,20 @@
+# --- private strategy docs (internal, never publish) ---
+/RESEARCH.md
+/PLAN.md
+
+# --- secrets & key material: NOTHING under runtime/ is ever committed ---
+/runtime/
+*.age
+.frost*/
+*.pczt
+pczt.*
+
+# --- build artifacts ---
+/target
+**/*.rs.bk
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.log
