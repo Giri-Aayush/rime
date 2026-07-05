@@ -17,7 +17,7 @@ export function Dashboard({ rime }: { rime: RimeState }) {
     <>
       <HeaderBar rime={rime} />
 
-      <main className="mx-auto grid w-full max-w-[1720px] grid-cols-1 items-start gap-[22px] px-7 pb-[160px] pt-[22px] xl:grid-cols-[minmax(400px,2fr)_3fr]">
+      <main className="mx-auto grid w-full max-w-[1720px] grid-cols-1 items-start gap-6 px-7 pb-[168px] pt-8 xl:grid-cols-[minmax(400px,2fr)_3fr]">
         <section className="flex min-w-0 flex-col gap-4" aria-label="Treasury">
           <TreasuryCard rime={rime} />
           <NewRequest rime={rime} />
@@ -26,13 +26,13 @@ export function Dashboard({ rime }: { rime: RimeState }) {
         </section>
 
         <section className="min-w-0" aria-label="Signers">
-          <div className="mb-3.5 flex flex-wrap items-baseline gap-3.5 px-1">
+          <div className="mb-4 flex flex-wrap items-center gap-3 px-1">
             <SectionLabel>Signers</SectionLabel>
             <span className="text-xs italic text-muted-foreground/70">
               three people hold key shares — any two approvals move funds
             </span>
           </div>
-          <div className="grid grid-cols-1 gap-[18px] sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
             {SIGNERS.map((s, i) => (
               <SignerPhone key={s.id} rime={rime} signer={s} index={i} />
             ))}

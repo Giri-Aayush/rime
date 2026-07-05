@@ -10,7 +10,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Bezel } from "@/components/bezel";
 import { SectionLabel } from "@/components/section-label";
 import type { RimeState } from "@/hooks/use-rime-state";
 
@@ -52,55 +52,69 @@ export function TreasuryCard({ rime }: { rime: RimeState }) {
 
   return (
     <>
-      <Card className="gap-3 p-5">
-        <SectionLabel>Treasury balance</SectionLabel>
-        <div className="flex items-baseline gap-2.5">
-          <span className="font-mono text-[40px] font-medium leading-none tracking-tight text-foreground [text-shadow:0_0_30px_color-mix(in_oklab,var(--primary)_18%,transparent)]">
-            {balance ? fmtBalance(balance.total_zat) : "—"}
-          </span>
-          <span className="font-mono text-sm tracking-[0.1em] text-primary">
-            {unit}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          <span className="font-mono uppercase tracking-[0.1em] text-muted-foreground/70">
-            {funded ? "shielded · orchard" : "awaiting first deposit"}
-          </span>{" "}
-          — no single person can move these funds; any{" "}
-          <strong className="font-semibold text-primary">
-            {threshold} of {signerCount}
-          </strong>{" "}
-          signers must approve.
-        </p>
-      </Card>
+      <Bezel tone="mint">
+        <Card className="gap-4 rounded-[1.35rem] p-6">
+          <div className="flex items-center justify-between gap-3">
+            <SectionLabel accent="mint">Treasury balance</SectionLabel>
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+              {funded ? "shielded · orchard" : "awaiting deposit"}
+            </span>
+          </div>
 
-      <Card className="gap-3 p-5">
-        <SectionLabel>Deposit address · Orchard</SectionLabel>
-        <div className="flex items-center gap-2.5">
-          <code
-            className="min-w-0 flex-1 truncate rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-primary"
-            title={address}
-          >
-            {address || "—"}
-          </code>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={copyAddress}
-            className={
-              copied ? "shrink-0 border-success/45 text-success" : "shrink-0"
-            }
-          >
-            {copied ? <CheckIcon /> : <CopyIcon />}
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
-        <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="size-1.5 shrink-0 rounded-full bg-primary shadow-[0_0_8px_var(--primary)]" />
-          Orchard receiver only — Sapling deposits would be unspendable.
-        </p>
-      </Card>
+          <div className="flex items-baseline gap-3">
+            <span className="font-mono text-[58px] font-medium leading-[0.85] tracking-[-0.03em] text-foreground tabular-nums [text-shadow:0_0_36px_color-mix(in_oklab,var(--primary)_20%,transparent)]">
+              {balance ? fmtBalance(balance.total_zat) : "—"}
+            </span>
+            <span className="font-mono text-sm tracking-[0.14em] text-primary">
+              {unit}
+            </span>
+          </div>
+
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            No single person can move these funds — any{" "}
+            <strong className="font-semibold text-primary">
+              {threshold} of {signerCount}
+            </strong>{" "}
+            signers must approve.
+          </p>
+        </Card>
+      </Bezel>
+
+      <Bezel>
+        <Card className="gap-3.5 rounded-[1.35rem] p-6">
+          <SectionLabel accent="blue">Deposit address · Orchard</SectionLabel>
+          <div className="flex items-center gap-2.5">
+            <code
+              className="min-w-0 flex-1 truncate rounded-full border border-border bg-background px-4 py-2.5 font-mono text-xs text-primary"
+              title={address}
+            >
+              {address || "—"}
+            </code>
+            <button
+              type="button"
+              onClick={copyAddress}
+              className={cn_copy(copied)}
+            >
+              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <p className="flex items-center gap-2 text-[12px] text-muted-foreground">
+            <span className="size-1.5 shrink-0 rounded-full bg-primary shadow-[0_0_8px_var(--primary)]" />
+            Orchard receiver only — Sapling deposits would be unspendable.
+          </p>
+        </Card>
+      </Bezel>
     </>
   );
+}
+
+// The copy pill — rounded, mono, flips to a success tone on success.
+function cn_copy(copied: boolean): string {
+  return [
+    "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.1em] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.96]",
+    copied
+      ? "border-success/45 bg-success/10 text-success"
+      : "border-border bg-secondary text-foreground hover:bg-accent",
+  ].join(" ");
 }

@@ -49,7 +49,8 @@ export function StepCascade({
           content = <span className="text-[11px] font-bold leading-none">✕</span>;
         } else if (i <= reached) {
           stateCls = "rime-step-done";
-          nodeCls = "border-primary bg-primary/15 text-primary";
+          nodeCls =
+            "border-primary bg-primary/15 text-primary shadow-[0_0_10px_-3px_var(--primary)]";
           labelCls = "text-muted-foreground";
         } else if (!failed && !finished && active && i === reached + 1) {
           nodeCls = "border-primary text-transparent rime-node-pulse";

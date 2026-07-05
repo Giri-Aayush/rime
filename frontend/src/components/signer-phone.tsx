@@ -1,34 +1,47 @@
 // One signer's phone, framed in a CSS bezel (desktop right column). Shows a
 // status chip and the signer's live approval queue. When quorum lands, the
 // ceremony progress appears here too. A lost device freezes over red; the
-// other signers thaw it back — the demo's centerpiece.
+// other signers thaw it back — the demo's centerpiece. Each signer carries a
+// distinct candy identity (Alice=violet, Bob=mint, Carol=blue).
 
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { SignerAvatar } from "@/components/signer-avatar";
 import { ApprovalCard } from "@/components/approval-card";
 import { CeremonyPanel } from "@/components/ceremony-panel";
 import { RecoveryPanel } from "@/components/recovery-panel";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { IslandButton } from "@/components/island-button";
 import { BigTick } from "@/components/tick-icons";
+import { SIGNER_ACCENT } from "@/components/signer-identity";
 import type { SignerConfig } from "@/lib/rime";
 import { SIGNERS } from "@/lib/rime";
 import type { RimeState } from "@/hooks/use-rime-state";
 
-function StatusChip({ status }: { status: "active" | "lost" | "repairing" }) {
+function PhoneStatusChip({
+  status,
+  accentText,
+  accentSoft,
+  accentBorder,
+}: {
+  status: "active" | "lost" | "repairing";
+  accentText: string;
+  accentSoft: string;
+  accentBorder: string;
+}) {
   const map = {
-    active: "border-success/35 bg-success/[0.06] text-success",
+    active: cn(accentBorder, accentSoft, accentText),
     lost: "border-destructive/50 bg-destructive/10 text-destructive",
-    repairing: "border-primary/45 bg-primary/10 text-primary",
+    repairing: "border-blue/45 bg-blue/10 text-blue",
   } as const;
   const label = { active: "Active", lost: "Lost", repairing: "Repairing" }[status];
   return (
     <span
       className={cn(
-        "rounded-full border px-2.5 py-0.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em]",
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em]",
         map[status],
       )}
     >
+      <span className="size-1 rounded-full bg-current" aria-hidden="true" />
       {label}
     </span>
   );
@@ -49,6 +62,7 @@ export function SignerPhone({
   const lost = st === "lost";
   const repairing = st === "repairing";
   const down = (lost || repairing) && !reviving;
+  const accent = SIGNER_ACCENT[signer.hue];
 
   const q = rime.phoneQueue(signer.id);
   const pending = q.open.length;
@@ -56,7 +70,7 @@ export function SignerPhone({
   const frameTone = reviving
     ? "rime-thaw border-success/40"
     : repairing
-      ? "border-primary/30"
+      ? "border-blue/30"
       : down
         ? "border-destructive/30 from-destructive/[0.05]"
         : "border-border";
@@ -71,22 +85,38 @@ export function SignerPhone({
     <div
       aria-label={`${name}'s phone`}
       className={cn(
-        "relative flex min-h-[560px] flex-col rounded-[34px] border bg-gradient-to-b from-card to-background p-3.5 pb-[18px]",
+        "relative flex min-h-[560px] flex-col overflow-hidden rounded-[34px] border bg-gradient-to-b from-card to-background p-3.5 pb-[18px]",
         "shadow-[inset_0_0_0_5px_var(--background),inset_0_0_0_6px_var(--border),0_18px_40px_-20px_rgba(0,0,0,0.9)]",
         frameTone,
       )}
     >
+      {/* per-signer color-block wash bleeding down from the top */}
+      {!down && !reviving && (
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-x-0 top-0 h-32",
+            accent.block,
+          )}
+        />
+      )}
+
       {/* notch */}
-      <div className="mx-auto mb-3 mt-1 h-[15px] w-[74px] shrink-0 rounded-full border border-border bg-background" />
+      <div className="relative mx-auto mb-3 mt-1 h-[15px] w-[74px] shrink-0 rounded-full border border-border bg-background" />
 
       {/* head */}
-      <div className="mb-3 flex items-center gap-2.5 border-b border-border px-2 pb-3">
+      <div
+        className={cn(
+          "relative mb-3 flex items-center gap-2.5 border-b px-2 pb-3",
+          down || reviving ? "border-border" : accent.border,
+        )}
+      >
         <SignerAvatar hue={signer.hue} name={name} muted={down} />
         <div className="min-w-0">
           <div
             className={cn(
               "text-[15px] font-semibold",
-              down && "text-muted-foreground",
+              down ? "text-muted-foreground" : accent.text,
             )}
           >
             {name}
@@ -96,13 +126,18 @@ export function SignerPhone({
           </div>
         </div>
         <div className="ml-auto flex shrink-0 flex-col items-end gap-1.5">
-          <StatusChip status={chipStatus} />
+          <PhoneStatusChip
+            status={chipStatus}
+            accentText={accent.text}
+            accentSoft={accent.soft}
+            accentBorder={accent.border}
+          />
           {!down && !reviving && (
             <span
               className={cn(
                 "rounded-full border px-2 py-0.5 font-mono text-[10px]",
                 pending
-                  ? "border-primary/30 bg-primary/10 text-primary"
+                  ? cn(accent.border, accent.soft, accent.text)
                   : "border-border text-muted-foreground/70",
               )}
             >
@@ -113,7 +148,7 @@ export function SignerPhone({
       </div>
 
       {/* screen */}
-      <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-0.5 pb-0.5">
+      <div className="relative flex flex-1 flex-col gap-2.5 overflow-y-auto px-0.5 pb-0.5">
         {down || reviving ? (
           <LostScreen rime={rime} signer={signer} name={name} reviving={reviving} repairing={repairing} />
         ) : (
@@ -123,7 +158,7 @@ export function SignerPhone({
 
       {/* footer: report lost */}
       {!down && !reviving && (
-        <div className="flex shrink-0 justify-center pb-0.5 pt-2">
+        <div className="relative flex shrink-0 justify-center pb-0.5 pt-2">
           <ConfirmDialog
             title={`Report ${name}'s device as lost?`}
             description="The other two signers will rebuild the share. The treasury address does not change."
@@ -133,7 +168,7 @@ export function SignerPhone({
             trigger={
               <button
                 type="button"
-                className="rounded-md px-2 py-1 text-[10.5px] tracking-[0.08em] text-muted-foreground/70 transition-colors hover:bg-destructive/[0.06] hover:text-destructive"
+                className="rounded-full px-3 py-1 text-[10.5px] tracking-[0.06em] text-muted-foreground/70 transition-colors hover:bg-destructive/[0.06] hover:text-destructive"
               >
                 Report device lost
               </button>
@@ -239,13 +274,13 @@ function LostScreen({
       {repairing ? (
         <RecoveryPanel rec={rime.recoveryFor(signer.id)} />
       ) : (
-        <Button
-          type="button"
+        <IslandButton
           onClick={() => rime.repair(signer.id)}
-          className="mt-1 px-4.5 py-2.5 text-[12.5px] tracking-[0.04em] shadow-[0_0_22px_-6px_var(--primary)]"
+          className="mt-1.5"
+          size="sm"
         >
           Repair from other signers
-        </Button>
+        </IslandButton>
       )}
     </div>
   );

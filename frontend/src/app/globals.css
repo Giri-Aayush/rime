@@ -4,57 +4,65 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  Rime frost theme. Dark-only: a cold near-black-blue canvas, ice-blue as the
-  single accent, frost-white text, hairline borders. Color is a scarce
-  resource here — reserved for status and the one accent.
+  Rime — frost theme, wavelength.cx-inspired. Dark-only: a cool near-black
+  canvas (neutral, a hair cold — frost, not wavelength's warm espresso) with
+  warm-neutral off-white type, generous radii, and a cold-candy accent trio
+  (mint / electric blue / lavender — the frost-compatible end of wavelength's
+  palette) used for status pills, per-signer identity, and the signing-route
+  motif. Color is deployed with intent: neutral surfaces, candy for meaning.
 */
 :root {
-  --radius: 0.625rem;
+  --radius: 1rem;
 
-  --background: #070b11;
-  --foreground: #e6edf5;
+  --background: #0a0c0f;
+  --foreground: #eceef1;
 
-  --card: #0b1119;
-  --card-foreground: #e6edf5;
-  --popover: #0d141d;
-  --popover-foreground: #e6edf5;
+  --card: #101317;
+  --card-foreground: #eceef1;
+  --popover: #14181d;
+  --popover-foreground: #eceef1;
 
-  --primary: #38bdf8;
-  --primary-foreground: #04121c;
+  /* mint is the primary frost accent (wavelength #63f6b5, cooled slightly) */
+  --primary: #5eead4;
+  --primary-foreground: #06110e;
 
-  --secondary: #131c27;
-  --secondary-foreground: #cbd8e6;
+  --secondary: #191d23;
+  --secondary-foreground: #cdd2da;
 
-  --muted: #101823;
-  --muted-foreground: #7688a0;
+  --muted: #14171c;
+  --muted-foreground: #838b98;
 
-  --accent: #14202e;
-  --accent-foreground: #e6edf5;
+  --accent: #1a1f26;
+  --accent-foreground: #eceef1;
 
-  --destructive: #f26d6d;
-  --destructive-foreground: #1a0808;
+  --destructive: #fb7185;
+  --destructive-foreground: #1a0509;
 
-  --border: #1b2735;
-  --input: #1b2735;
-  --ring: #38bdf8;
+  --border: #23282f;
+  --input: #23282f;
+  --ring: #5eead4;
 
-  --success: #4ade80;
-  --warning: #fbbf24;
+  /* candy accents — the cold trio from wavelength, plus semantic warmers */
+  --mint: #5eead4;
+  --blue: #678efd;
+  --violet: #a184fa;
+  --success: #63f6b5;
+  --warning: #ffd45e;
 
-  --chart-1: #38bdf8;
-  --chart-2: #7dd3fc;
-  --chart-3: #818cf8;
-  --chart-4: #22d3ee;
-  --chart-5: #a5b4fc;
+  --chart-1: #5eead4;
+  --chart-2: #678efd;
+  --chart-3: #a184fa;
+  --chart-4: #63f6b5;
+  --chart-5: #f677fd;
 
-  --sidebar: #0b1119;
-  --sidebar-foreground: #e6edf5;
-  --sidebar-primary: #38bdf8;
-  --sidebar-primary-foreground: #04121c;
-  --sidebar-accent: #14202e;
-  --sidebar-accent-foreground: #e6edf5;
-  --sidebar-border: #1b2735;
-  --sidebar-ring: #38bdf8;
+  --sidebar: #101317;
+  --sidebar-foreground: #eceef1;
+  --sidebar-primary: #5eead4;
+  --sidebar-primary-foreground: #06110e;
+  --sidebar-accent: #1a1f26;
+  --sidebar-accent-foreground: #eceef1;
+  --sidebar-border: #23282f;
+  --sidebar-ring: #5eead4;
 }
 
 .dark {
@@ -85,6 +93,9 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-mint: var(--mint);
+  --color-blue: var(--blue);
+  --color-violet: var(--violet);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -116,12 +127,11 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-    /* faint frost wash top-left, so the canvas isn't a flat void */
-    background-image: radial-gradient(
-      1200px 600px at 12% -10%,
-      color-mix(in oklab, var(--primary) 9%, transparent),
-      transparent 60%
-    );
+    /* two faint candy washes (mint top-left, lavender top-right) — the
+       wavelength move of colored light bleeding onto a dark canvas */
+    background-image:
+      radial-gradient(900px 520px at 8% -8%, color-mix(in oklab, var(--mint) 10%, transparent), transparent 55%),
+      radial-gradient(900px 520px at 96% -4%, color-mix(in oklab, var(--violet) 8%, transparent), transparent 55%);
     background-attachment: fixed;
   }
   ::selection {
@@ -138,4 +148,11 @@
     transparent
   );
   height: 1px;
+}
+
+/* Dashed signing-route traces drift along their path (RouteLines motif). */
+@keyframes rime-route-flow {
+  to {
+    stroke-dashoffset: -120;
+  }
 }

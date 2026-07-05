@@ -50,8 +50,8 @@ export function RecoveryPanel({
   return (
     <div
       className={cn(
-        "rime-rise w-full rounded-xl border bg-primary/[0.05] p-3.5 text-left",
-        size === "lg" && "mt-2",
+        "rime-rise w-full rounded-2xl border bg-primary/[0.05] p-3.5 text-left",
+        size === "lg" && "mt-2 rounded-[20px] p-4",
         tone,
       )}
     >

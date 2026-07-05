@@ -28,21 +28,21 @@ export function CeremonyPanel({
   const txid = active.req?.txid;
 
   const tone = failed
-    ? "border-destructive/40"
+    ? "border-destructive/40 bg-destructive/[0.04]"
     : finished
-      ? "border-success/40"
-      : "border-primary/35";
+      ? "border-success/40 bg-success/[0.05]"
+      : "border-blue/35 bg-blue/[0.05]";
   const titleTone = failed
     ? "text-destructive"
     : finished
       ? "text-success"
-      : "text-primary";
+      : "text-blue";
 
   return (
     <div
       className={cn(
-        "rime-rise rounded-xl border bg-primary/[0.04] p-3",
-        large && "rounded-[18px] p-4",
+        "rime-rise rounded-2xl border p-3.5",
+        large && "rounded-[20px] p-4",
         tone,
       )}
     >
@@ -73,11 +73,15 @@ export function CeremonyPanel({
         {line}
       </div>
 
-      <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-muted">
+      <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
             "h-full transition-[width] duration-500 ease-out",
-            failed ? "bg-destructive" : "bg-gradient-to-r from-primary to-success",
+            failed
+              ? "bg-destructive"
+              : finished
+                ? "bg-success"
+                : "bg-gradient-to-r from-blue to-success",
           )}
           style={{ width: `${pct}%` }}
         />
