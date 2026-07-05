@@ -1,0 +1,29 @@
+# Keep the build context tiny and — critically — keep SECRETS out of the image.
+
+# ── SECRETS: cleartext FROST shares, watch-only wallet, TLS keys, PCZTs, DB ──
+# runtime/ must NEVER enter an image layer. It is mounted at run time instead.
+runtime/
+
+# ── Rust build artifacts (rebuilt inside the image) ──
+target/
+**/target/
+**/*.rs.bk
+
+# ── Node / Next.js (reinstalled + rebuilt inside the frontend stage) ──
+**/node_modules/
+frontend/out/
+frontend/.next/
+
+# ── VCS, logs, OS/editor cruft, agent scratch ──
+.git/
+.gitignore
+*.log
+.DS_Store
+.idea/
+.vscode/
+.agents/
+
+# ── Docker files themselves (not needed inside the build) ──
+Dockerfile
+docker-compose.yml
+.dockerignore

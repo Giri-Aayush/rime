@@ -1,0 +1,137 @@
+# Rime — Zcash FROST treasury — one-command bring-up.
+#
+# Two long-running services, mirroring the real prototype:
+#   frostd       — the ZF coordination server (TLS, port 2744)
+#   rime-server  — the treasury workflow engine + web UI (port 8787)
+#
+# Signers are NOT separate containers. In this prototype the FROST participants
+# are orchestrated by rime-server as subprocesses (see rime-server/src/
+# pipeline.rs); the phones/iPad are the human approval surface, not separate
+# daemons. That is the honest architecture — documented in THREAT_MODEL.md.
+#
+# ── The localhost/TLS subtlety (why rime-server shares frostd's netns) ────────
+# frostd's TLS cert (scripts/05_frostd_tls.sh) is issued for CN=localhost with
+# SAN DNS:localhost, IP:127.0.0.1 ONLY. frost-client validates the hostname
+# against that SAN, and rime-server.toml points at frostd_url = "localhost:2744".
+# So rime-server MUST reach frostd as "localhost" for the cert to verify. We give
+# rime-server frostd's network namespace (network_mode: "service:frostd"); from
+# rime-server, frostd really is at localhost:2744 and the cert validates — no
+# certificate regeneration, no source changes. A consequence: rime-server cannot
+# declare its own published ports, so 8787 is published on the frostd service
+# (they share one network stack).
+#
+# ── Persistence & secrets ─────────────────────────────────────────────────────
+# Everything under ./runtime (keys, wallet, DB, TLS, PCZTs) is a bind mount so it
+# persists across `up`/`down` and is NEVER baked into the image. runtime/ is
+# gitignored and holds cleartext FROST shares — treat it like a private key,
+# because it is one.
+#
+# ── Configuration ─────────────────────────────────────────────────────────────
+# Override via the shell or a local `.env` file (compose reads it automatically):
+#   RIME_NET=test|main         (default: test — safe for demos)
+#   RIME_BIND=0.0.0.0:8787     (LAN/multi-device demo; loopback-only otherwise)
+#   RIME_DISCORD_WEBHOOK=...    (optional team notifications)
+
+name: rime
+
+services:
+  # ── frostd — FROST coordination server (transport for the ceremony) ────────
+  frostd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rime:local
+    working_dir: /app
+    # Bind 0.0.0.0 inside the container; clients still connect via "localhost"
+    # so the localhost-only cert validates. Certs come from runtime/tls, which
+    # the `init` service (or `make keygen`) generates before first `up`.
+    command:
+      - frostd
+      - -i
+      - 0.0.0.0
+      - -p
+      - "2744"
+      - -c
+      - runtime/tls/server.crt
+      - -k
+      - runtime/tls/server.key
+    volumes:
+      - ./runtime:/app/runtime
+    ports:
+      # rime-server shares this namespace, so its 8787 is published HERE.
+      - "8787:8787"
+      # frostd itself — handy if you want to point external frost-clients at it.
+      - "2744:2744"
+    healthcheck:
+      # Cheap TCP liveness probe (frostd speaks TLS, so no plain HTTP check).
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2744'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── rime-server — treasury workflow engine + web UI ────────────────────────
+  rime-server:
+    image: rime:local
+    # Inherit frostd's image build (only one service needs `build:`).
+    depends_on:
+      frostd:
+        condition: service_healthy
+    # Share frostd's network stack so frostd is reachable at localhost:2744 with
+    # its localhost-only TLS cert. This also means: NO `ports:` here.
+    network_mode: "service:frostd"
+    working_dir: /app
+    command: ["rime-server"]
+    environment:
+      # Network for the scripts/ pipeline. rime-server itself reads the network
+      # from rime-server.toml; this keeps the two in sync for shelled-out tools.
+      RIME_NET: ${RIME_NET:-test}
+      # Signing config (group, signers, tokens, treasury address). Lives under
+      # the mounted runtime/. Without it, rime-server runs workflow-only (no
+      # ceremony) — see rime-server/config.example.toml for the shape.
+      RIME_SERVER_CONFIG: runtime/rime-server.toml
+      # CA that signs frostd's cert; frost-client honors SSL_CERT_FILE.
+      SSL_CERT_FILE: runtime/tls/ca.crt
+      # 0.0.0.0 exposes the UI to the LAN for the multi-device demo (phones open
+      # http://<mac-lan-ip>:8787/?signer=alice|bob|carol). Use 127.0.0.1:8787 to
+      # keep it loopback-only. Published on the frostd service (shared netns).
+      RIME_BIND: ${RIME_BIND:-0.0.0.0:8787}
+      # Optional: team notifications for quorum / broadcast / recovery.
+      RIME_DISCORD_WEBHOOK: ${RIME_DISCORD_WEBHOOK:-}
+    volumes:
+      - ./runtime:/app/runtime
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── init — one-shot: TLS + keygen + address + wallet-init ──────────────────
+  # NOT started by default. Run it ONCE before the first `up`:
+  #     docker compose run --rm init
+  # (or `docker compose --profile init up init`). It drives scripts/bringup.sh:
+  #   05_frostd_tls  → 10_keygen  → 20_address  → 30_wallet_init
+  # producing the gitignored files under runtime/ (certs, per-signer shares,
+  # treasury address, watch-only wallet). Idempotent where the underlying
+  # scripts are; it stops and prints the exact manual step if a tool's output
+  # can't be parsed automatically. After it finishes, create/confirm
+  # runtime/rime-server.toml (see SETUP.md), then `docker compose up -d`.
+  init:
+    image: rime:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["init"]
+    working_dir: /app
+    environment:
+      RIME_NET: ${RIME_NET:-test}
+      # Wallet sync connection mode for zcash-devtool (30_wallet_init.sh);
+      # "direct" avoids Tor DNS issues on testnet.
+      RIME_CONNECTION: ${RIME_CONNECTION:-direct}
+    volumes:
+      - ./runtime:/app/runtime
+    entrypoint: ["bash", "scripts/bringup.sh"]
+    restart: "no"
