@@ -47,6 +47,12 @@ const STEP_LABELS = {
   "broadcast":       "Broadcast to network",
   "confirmed":       "Confirmed on chain",
   "failed":          "Ceremony failed",
+  // signer recovery ("lake scene")
+  "recovery.lost":    "Device share marked lost",
+  "recovery.repair":  "Remaining signers rebuilding the share",
+  "recovery.refresh": "Rotating all shares — old share is now a dead key",
+  "recovery.done":    "Signer restored · treasury address unchanged",
+  "recovery.failed":  "Recovery failed",
 };
 
 /* Short labels for the pipeline strip nodes. */
@@ -64,6 +70,14 @@ const STEP_SHORT = {
   "confirmed":       "Confirmed",
 };
 
+/* Recovery pipeline (post-"lost" repair sequence), in order. */
+const RECOVERY_ORDER = ["recovery.repair", "recovery.refresh", "recovery.done"];
+const RECOVERY_SHORT = {
+  "recovery.repair":  "Rebuild",
+  "recovery.refresh": "Rotate keys",
+  "recovery.done":    "Restored",
+};
+
 const stepLabel = (s) => STEP_LABELS[s] || s;
 
 /* ─── state ───────────────────────────────────────────────────────── */
@@ -77,6 +91,8 @@ const state = {
   activeCeremonyId: null,   // request id shown on the strip
   sse: "connecting",        // connecting | live | offline
   recipientDirty: false,
+  signers: [],              // from GET /api/signers → [{id, name, status}]
+  recovery: null,           // active repair: {signerId, reached, step, failed, done, reviveUntil}
 };
 
 const threshold = () => state.treasury?.threshold ?? 2;
@@ -158,8 +174,13 @@ async function api(path, { method = "GET", body, token = readToken() } = {}) {
   });
   if (!res.ok) {
     let detail = "";
-    try { detail = (await res.json()).error || ""; } catch { /* ignore */ }
-    throw new Error(detail || `${res.status} ${res.statusText}`);
+    try {
+      const ct = res.headers.get("content-type") || "";
+      detail = ct.includes("json")
+        ? ((await res.json()).error || "")
+        : (await res.text()); // mark-lost 409 returns a plain-text reason
+    } catch { /* ignore */ }
+    throw new Error((detail || "").trim() || `${res.status} ${res.statusText}`);
   }
   return res.json();
 }
@@ -198,6 +219,16 @@ async function refreshAudit() {
   } catch { /* ignore */ }
 }
 
+async function refreshSigners() {
+  try {
+    const list = await api("/api/signers");
+    if (Array.isArray(list)) {
+      state.signers = list;
+      renderPhones();
+    }
+  } catch { /* keep last known signer statuses */ }
+}
+
 let refreshQueued = false;
 function scheduleRefresh() {
   if (refreshQueued) return;
@@ -206,6 +237,7 @@ function scheduleRefresh() {
     refreshQueued = false;
     refreshRequests();
     refreshAudit();
+    refreshSigners();
   }, 250);
 }
 
@@ -223,7 +255,13 @@ async function connectSSE() {
     sseSource.onopen = () => { sseBackoff = 1000; setConn("live"); };
 
     sseSource.onmessage = (ev) => {
-      try { onCeremonyEvent(JSON.parse(ev.data)); } catch { /* non-JSON keepalive */ }
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg && typeof msg.step === "string" && msg.step.startsWith("recovery."))
+          onRecoveryEvent(msg);
+        else
+          onCeremonyEvent(msg);
+      } catch { /* non-JSON keepalive */ }
     };
 
     sseSource.onerror = () => {
@@ -280,6 +318,65 @@ function onCeremonyEvent(msg) {
   renderPhones();
   renderFeed();
   scheduleRefresh(); // pull authoritative statuses shortly after
+}
+
+/* ─── signer status helpers ───────────────────────────────────────── */
+
+function signerStatus(id) {
+  const s = state.signers.find((x) => x.id === id);
+  return s ? s.status : "active"; // default until /api/signers lands
+}
+const signerName = (id) => SIGNERS.find((s) => s.id === id)?.name || `Signer ${id}`;
+
+function setLocalSignerStatus(id, status) {
+  const s = state.signers.find((x) => x.id === id);
+  if (s) s.status = status;
+  else state.signers.push({ id, name: signerName(id), status });
+}
+
+/* Recovery SSE (request_id 0). recovery.lost just flags the loss (poll shows
+   it); repair/refresh/done/failed drive the animated repair panel. */
+function onRecoveryEvent(msg) {
+  const step = msg.step;
+
+  if (step === "recovery.lost") {
+    scheduleRefresh();
+    renderPhones();
+    return;
+  }
+
+  let r = state.recovery;
+  if (!r) r = state.recovery = { signerId: null, reached: -1, step: null, failed: null, done: false, reviveUntil: 0 };
+  if (r.signerId == null) {
+    const cand = state.signers.find((x) => x.status === "lost" || x.status === "repairing")
+      || (ME != null ? SIGNERS[ME] : null);
+    if (cand) r.signerId = cand.id;
+  }
+  r.step = step;
+
+  if (step === "recovery.failed") {
+    r.failed = msg.detail || "Recovery failed";
+  } else {
+    const idx = RECOVERY_ORDER.indexOf(step);
+    if (idx >= 0) r.reached = Math.max(r.reached, idx);
+    if (step === "recovery.done") {
+      r.done = true;
+      if (r.signerId != null) setLocalSignerStatus(r.signerId, "active");
+      const win = ME != null ? 2600 : 1800; // device lingers on "Restored ✓" a beat longer
+      r.reviveUntil = Date.now() + win;
+      const finishedId = r.signerId;
+      setTimeout(() => {
+        if (state.recovery && state.recovery.signerId === finishedId && state.recovery.done) {
+          state.recovery = null;
+        }
+        refreshSigners();
+        renderPhones();
+      }, win);
+    }
+  }
+
+  renderPhones();
+  scheduleRefresh();
 }
 
 /* ─── render: header + treasury ───────────────────────────────────── */
@@ -449,39 +546,145 @@ function pcard(req, signer, kind) {
     </div>`;
 }
 
-function renderPhones() {
-  if (ME != null) { renderSignerApp(); return; }
-  const wrap = $("#phones");
-  const panel = ceremonyPanel();
-  const scrolls = [...wrap.querySelectorAll(".phone-screen")].map((el) => el.scrollTop);
-  wrap.innerHTML = SIGNERS.map((s, i) => {
+/* ─── render: signer recovery ("lake scene") ──────────────────────── */
+
+const BIG_TICK = `<svg class="big-tick" viewBox="0 0 52 52" aria-hidden="true">
+  <circle cx="26" cy="26" r="23"/><path d="M15 27l7 7 15-16"/></svg>`;
+
+/** Is signer `id` currently mid-repair (repairing status or live recovery). */
+function isRepairing(id) {
+  const r = state.recovery;
+  return signerStatus(id) === "repairing" || !!(r && r.signerId === id && !r.done);
+}
+/** Show the celebratory revival for a short window after recovery.done. */
+function isReviving(id) {
+  const r = state.recovery;
+  return !!(r && r.signerId === id && r.done && Date.now() < r.reviveUntil);
+}
+
+/* Animated repair progress — reuses the ceremony checkmark cascade. */
+function recoveryPanel(signerId) {
+  const r = state.recovery;
+  const active = !!(r && r.signerId === signerId);
+  const reached = active ? r.reached : -1;
+  const failed = active ? r.failed : null;
+  const done = active ? r.done : false;
+  const cls = failed ? " recovery--failed" : done ? " recovery--done" : "";
+  const title = failed ? "Recovery failed" : done ? "Signer restored" : "Recovery in progress";
+  const line = failed ? esc(failed)
+    : active && r.step ? esc(stepLabel(r.step))
+    : "Rebuilding the share from the other two signers…";
+  const failAt = failed ? Math.min(reached + 1, RECOVERY_ORDER.length - 1) : -1;
+
+  const nodes = RECOVERY_ORDER.map((step, i) => {
+    let c = "", inner = TICK_SVG;
+    if (failed && i === failAt) { c = "fail"; inner = `<span class="step-x">✕</span>`; }
+    else if (i <= reached) c = "done";
+    else if (!failed && !done && active && i === reached + 1) c = "active";
+    const link = i < RECOVERY_ORDER.length - 1
+      ? `<span class="step-link${i <= reached - 1 ? " done" : ""}"></span>` : "";
+    return `
+      <div class="step ${c}">
+        <span class="step-node">${inner}</span>
+        <span class="step-label">${esc(RECOVERY_SHORT[step] || step)}</span>
+      </div>${link}`;
+  }).join("");
+
+  return `
+    <div class="recovery${cls}">
+      <div class="recovery-title"><span class="live-dot"></span>${title}</div>
+      <div class="recovery-step">${line}</div>
+      <div class="recovery-steps">${nodes}</div>
+    </div>`;
+}
+
+/* Screen shown inside a lost / repairing / reviving phone frame. */
+function phoneLostScreen(s) {
+  if (isReviving(s.id)) {
+    return `
+      <div class="revive-panel">
+        <div class="revive-check">${BIG_TICK}</div>
+        <div class="revive-title">Share restored</div>
+        <div class="revive-sub">Treasury address unchanged — ${esc(s.name)} can approve again.</div>
+      </div>`;
+  }
+  const repairing = isRepairing(s.id);
+  return `
+    <div class="lost-panel">
+      <div class="lost-glyph" aria-hidden="true">❄</div>
+      <div class="lost-title">Device share lost</div>
+      <div class="lost-desc">${esc(s.name)}'s key share is gone. Funds stay safe —
+        the other two signers can rebuild it. Nothing moves without ${threshold()} approvals.</div>
+      ${repairing
+        ? recoveryPanel(s.id)
+        : `<button class="btn btn-repair" data-repair="${s.id}" type="button">Repair from other signers</button>`}
+    </div>`;
+}
+
+/* ─── render: signer phones ───────────────────────────────────────── */
+
+function renderPhone(s, i) {
+  const st = signerStatus(s.id);
+  const lost = st === "lost";
+  const repairing = isRepairing(s.id);
+  const reviving = isReviving(s.id);
+  const down = (lost || repairing) && !reviving;
+
+  const frameCls = ["phone",
+    down ? "phone--lost" : "",
+    repairing && !reviving ? "phone--repairing" : "",
+    reviving ? "phone--revived" : "",
+  ].filter(Boolean).join(" ");
+
+  let statusChip;
+  if (repairing && !reviving) statusChip = `<span class="phone-status status--repairing">Repairing</span>`;
+  else if (lost && !reviving) statusChip = `<span class="phone-status status--lost">Lost</span>`;
+  else statusChip = `<span class="phone-status status--active">Active</span>`;
+
+  let screen, foot = "";
+  if (down || reviving) {
+    screen = phoneLostScreen(s);
+  } else {
     const q = phoneQueue(s);
-    const count = q.open.length;
     const cards = [
-      panel,
+      ceremonyPanel(),
       ...q.open.map((r) => pcard(r, s, "open")),
       ...q.others.map((r) => pcard(r, s, "others")),
       ...q.decided.map((r) => pcard(r, s, "decided")),
     ].filter(Boolean);
-    return `
-    <div class="phone" aria-label="${esc(s.name)}'s phone">
+    screen = cards.length ? cards.join("") : `
+      <div class="phone-empty">
+        <div><span class="flake">✻</span>No pending approvals<br>All quiet on the ice.</div>
+      </div>`;
+    foot = `<div class="phone-foot">
+        <button class="phone-lost-link" data-report-lost="${s.id}" type="button">Report device lost</button>
+      </div>`;
+  }
+
+  const pending = (down || reviving) ? "" :
+    `<span class="phone-badge${phoneQueue(s).open.length ? "" : " zero"}">${phoneQueue(s).open.length} pending</span>`;
+
+  return `
+    <div class="${frameCls}" aria-label="${esc(s.name)}'s phone">
       <div class="phone-notch"></div>
       <div class="phone-head">
         <span class="avatar avatar--${s.hue}">${esc(s.name[0] || "?")}</span>
-        <div>
+        <div class="phone-id">
           <div class="phone-name">${esc(s.name)}</div>
           <div class="phone-role">signer ${i + 1} of ${SIGNERS.length}</div>
         </div>
-        <span class="phone-badge${count ? "" : " zero"}">${count} pending</span>
+        <div class="phone-head-right">${statusChip}${pending}</div>
       </div>
-      <div class="phone-screen">
-        ${cards.length ? cards.join("") : `
-          <div class="phone-empty">
-            <div><span class="flake">✻</span>No pending approvals<br>All quiet on the ice.</div>
-          </div>`}
-      </div>
+      <div class="phone-screen">${screen}</div>
+      ${foot}
     </div>`;
-  }).join("");
+}
+
+function renderPhones() {
+  if (ME != null) { renderSignerApp(); return; }
+  const wrap = $("#phones");
+  const scrolls = [...wrap.querySelectorAll(".phone-screen")].map((el) => el.scrollTop);
+  wrap.innerHTML = SIGNERS.map((s, i) => renderPhone(s, i)).join("");
   [...wrap.querySelectorAll(".phone-screen")].forEach((el, i) => {
     if (scrolls[i]) el.scrollTop = scrolls[i];
   });
@@ -489,9 +692,60 @@ function renderPhones() {
 
 /* ─── render: device mode (one real phone = one signer) ───────────── */
 
+function signerHead(s, muted) {
+  return `
+    <div class="signer-head">
+      <span class="avatar avatar--${s.hue}${muted ? " avatar--muted" : ""}">${esc(s.name[0] || "?")}</span>
+      <div class="signer-id">
+        <div class="signer-name">${esc(s.name)}</div>
+        <div class="signer-role">Rime treasury · signer ${ME + 1} of ${SIGNERS.length}</div>
+      </div>
+      <span class="conn conn--${state.sse}" id="sconn">
+        <span class="conn-dot"></span><span id="sconn-label">${esc(state.sse === "live" ? "live" : state.sse)}</span>
+      </span>
+    </div>`;
+}
+
 function renderSignerApp() {
   const app = $("#signer-app");
   const s = SIGNERS[ME];
+  const st = signerStatus(s.id);
+  document.body.classList.toggle("device-down", (st === "lost" || isRepairing(s.id)) && !isReviving(s.id));
+
+  // ── Restored ✓ celebration ──
+  if (isReviving(s.id)) {
+    app.innerHTML = `
+      ${signerHead(s, false)}
+      <div class="signer-screen">
+        <div class="device-restored">
+          <div class="restored-check">${BIG_TICK}</div>
+          <div class="device-restored-title">Restored ✓</div>
+          <div class="device-restored-sub">Share rebuilt · treasury address unchanged.<br>You can approve payments again.</div>
+        </div>
+      </div>
+      <div class="signer-foot"><span class="foot-brand">🧊 Rime · share recovery</span></div>`;
+    return;
+  }
+
+  // ── Lost / recovering full-screen ──
+  if (st === "lost" || isRepairing(s.id)) {
+    app.innerHTML = `
+      ${signerHead(s, true)}
+      <div class="signer-screen device-lost-screen">
+        <div class="device-lost">
+          <div class="device-lost-glyph" aria-hidden="true">❄</div>
+          <div class="device-lost-title">This device's share was lost</div>
+          <div class="device-lost-sub">Recovering from the other two signers — your treasury is safe.</div>
+          ${recoveryPanel(s.id)}
+          <div class="device-lost-note">The old share is being retired as a dead key.
+            When recovery finishes you'll be able to approve again.</div>
+        </div>
+      </div>
+      <div class="signer-foot"><span class="foot-brand">🧊 Rime · 2‑of‑3 FROST</span></div>`;
+    return;
+  }
+
+  // ── Normal signer view ──
   const q = phoneQueue(s);
   const count = q.open.length;
   const cards = [
@@ -503,16 +757,7 @@ function renderSignerApp() {
 
   const prevScroll = $(".signer-screen", app)?.scrollTop ?? 0;
   app.innerHTML = `
-    <div class="signer-head">
-      <span class="avatar avatar--${s.hue}">${esc(s.name[0] || "?")}</span>
-      <div class="signer-id">
-        <div class="signer-name">${esc(s.name)}</div>
-        <div class="signer-role">Rime treasury · signer ${ME + 1} of ${SIGNERS.length}</div>
-      </div>
-      <span class="conn conn--${state.sse}" id="sconn">
-        <span class="conn-dot"></span><span id="sconn-label">${esc(state.sse === "live" ? "live" : state.sse)}</span>
-      </span>
-    </div>
+    ${signerHead(s, false)}
     <div class="signer-screen">
       ${count ? `<div class="signer-callout">${count} request${count === 1 ? "" : "s"} need${count === 1 ? "s" : ""} your approval</div>` : ""}
       ${cards.length ? cards.join("") : `
@@ -520,7 +765,10 @@ function renderSignerApp() {
           <div><span class="flake">✻</span>No pending approvals<br>All quiet on the ice.</div>
         </div>`}
     </div>
-    <div class="signer-foot">🧊 Rime · ${threshold()}&#8209;of&#8209;${SIGNERS.length} FROST — ${threshold()} approvals move funds</div>`;
+    <div class="signer-foot">
+      <button class="device-lost-link" data-report-lost="${s.id}" type="button">Report this device lost</button>
+      <span class="foot-brand">🧊 Rime · ${threshold()}&#8209;of&#8209;${SIGNERS.length} FROST</span>
+    </div>`;
   const screen = $(".signer-screen", app);
   if (screen && prevScroll) screen.scrollTop = prevScroll;
 }
@@ -627,6 +875,44 @@ async function decide(signerId, reqId, decision) {
   refreshRequests();
 }
 
+async function markLost(signerId) {
+  const signer = SIGNERS.find((s) => s.id === signerId);
+  if (!signer) return;
+  try {
+    const res = await api(`/api/signers/${signerId}/mark-lost`, {
+      method: "POST", token: signer.token, body: { signer_token: signer.token },
+    });
+    setLocalSignerStatus(signerId, res?.status || "lost"); // optimistic
+    toast(`${signer.name}'s device marked lost`);
+    renderPhones();
+    refreshSigners();
+  } catch (e) {
+    // 409 (plain text) when it would drop below 2 active signers
+    toast(e.message, true);
+  }
+}
+
+async function repairSigner(signerId) {
+  // repair is performed BY the other, still-active signers
+  const helper = SIGNERS.find((s) => s.id !== signerId && signerStatus(s.id) === "active")
+    || SIGNERS.find((s) => s.id !== signerId);
+  if (!helper) return;
+  state.recovery = { signerId, reached: -1, step: "recovery.repair", failed: null, done: false, reviveUntil: 0 };
+  setLocalSignerStatus(signerId, "repairing"); // optimistic
+  renderPhones();
+  try {
+    await api(`/api/signers/${signerId}/repair`, {
+      method: "POST", token: helper.token, body: { signer_token: helper.token },
+    });
+    toast(`Rebuilding ${signerName(signerId)}'s share from the other signers…`);
+    refreshSigners();
+  } catch (e) {
+    toast(e.message, true);
+    if (state.recovery && state.recovery.signerId === signerId) state.recovery.failed = e.message;
+    renderPhones();
+  }
+}
+
 async function submitRequest(ev) {
   ev.preventDefault();
   const errEl = $("#f-error");
@@ -688,19 +974,31 @@ async function copyAddress() {
 
 /* ─── wiring ──────────────────────────────────────────────────────── */
 
-function onDecideClick(ev) {
-  const btn = ev.target.closest("button[data-action]");
-  if (!btn) return;
-  const raw = btn.dataset.req;
-  const reqId = Number(raw);
-  decide(Number(btn.dataset.signer), Number.isNaN(reqId) ? raw : reqId, btn.dataset.action);
+/* One delegated handler for approve/reject, report-lost, and repair buttons. */
+function onPhoneClick(ev) {
+  const dec = ev.target.closest("button[data-action]");
+  if (dec) {
+    const raw = dec.dataset.req;
+    const reqId = Number(raw);
+    decide(Number(dec.dataset.signer), Number.isNaN(reqId) ? raw : reqId, dec.dataset.action);
+    return;
+  }
+  const report = ev.target.closest("button[data-report-lost]");
+  if (report) {
+    const id = Number(report.dataset.reportLost);
+    if (window.confirm(`Report ${signerName(id)}'s device as lost?\n\nThe other two signers will rebuild the share. The treasury address does not change.`))
+      markLost(id);
+    return;
+  }
+  const repair = ev.target.closest("button[data-repair]");
+  if (repair) { repairSigner(Number(repair.dataset.repair)); return; }
 }
 
 function wire() {
   if (ME != null) {
     // device mode: only the signer screen is interactive
     document.body.classList.add("mode-signer");
-    $("#signer-app").addEventListener("click", onDecideClick);
+    $("#signer-app").addEventListener("click", onPhoneClick);
     return;
   }
 
@@ -715,8 +1013,7 @@ function wire() {
       zat != null && zat > 0n ? `= ${Number(zat).toLocaleString("en-US")} zatoshis` : " ";
   });
 
-  // one delegated listener for all Approve/Reject buttons across phones
-  $("#phones").addEventListener("click", onDecideClick);
+  $("#phones").addEventListener("click", onPhoneClick);
 }
 
 function boot() {
@@ -727,8 +1024,9 @@ function boot() {
   loadTreasury();
   refreshRequests();
   refreshAudit();
+  refreshSigners();
   connectSSE();
-  setInterval(() => { refreshRequests(); refreshAudit(); }, POLL_MS);
+  setInterval(() => { refreshRequests(); refreshAudit(); refreshSigners(); }, POLL_MS);
 }
 
 boot();

@@ -923,6 +923,202 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #2a3a52; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ════════════════════════════════════════════════════════════════════
+   Signer recovery — the demo's "lake scene"
+   A lost phone freezes over; the other two signers thaw it back to life.
+   ════════════════════════════════════════════════════════════════════ */
+
+.phone-id { min-width: 0; }
+.phone-head-right {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex: none;
+}
+
+.phone-status {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.status--active    { color: var(--mint); border-color: rgba(94, 234, 212, 0.35); background: rgba(94, 234, 212, 0.06); }
+.status--lost      { color: var(--red); border-color: rgba(248, 113, 113, 0.5); background: var(--red-dim); }
+.status--repairing { color: var(--ice); border-color: rgba(125, 211, 252, 0.45); background: var(--ice-dim); }
+
+/* ─── lost phone frame: frozen over ─── */
+.phone--lost {
+  border-color: rgba(248, 113, 113, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(248, 113, 113, 0.06),
+    inset 0 0 0 5px #060a10,
+    inset 0 0 0 6px #241318,
+    0 18px 40px -20px rgba(0, 0, 0, 0.95);
+  background: linear-gradient(180deg, #14100f, #0d0a0c 60%, #0e0a0b);
+}
+.phone--lost .avatar { filter: grayscale(0.85) brightness(0.7); box-shadow: none; }
+.phone--lost .phone-name { color: var(--text-dim); }
+
+.phone--repairing {
+  border-color: rgba(125, 211, 252, 0.3);
+  background: linear-gradient(180deg, #0e1521, #0a0f18 60%, #0b1019);
+}
+.phone--repairing .avatar { filter: none; box-shadow: 0 0 14px -3px rgba(125, 211, 252, 0.55); }
+
+/* ─── the payoff: thaw back to life ─── */
+.phone--revived { animation: thaw 1.7s cubic-bezier(0.22, 1, 0.36, 1); }
+.phone--revived .avatar { animation: none; box-shadow: 0 0 14px -3px rgba(125, 211, 252, 0.55); }
+
+@keyframes thaw {
+  0%   { filter: grayscale(0.9) brightness(0.6); box-shadow: inset 0 0 0 6px #241318, 0 0 0 rgba(94, 234, 212, 0); }
+  35%  { filter: none; box-shadow: inset 0 0 0 6px #131c29, 0 0 46px -6px rgba(94, 234, 212, 0.65); }
+  70%  { box-shadow: inset 0 0 0 6px #131c29, 0 0 34px -10px rgba(125, 211, 252, 0.5); }
+  100% { filter: none; box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.07), inset 0 0 0 5px #060a10, inset 0 0 0 6px #131c29, 0 18px 40px -20px rgba(0, 0, 0, 0.95); }
+}
+
+/* ─── lost-screen content ─── */
+.lost-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 20px 8px 8px;
+}
+.lost-glyph {
+  font-size: 38px;
+  color: rgba(248, 113, 113, 0.55);
+  filter: drop-shadow(0 0 16px rgba(248, 113, 113, 0.35));
+  animation: frost-flicker 3.5s ease-in-out infinite;
+}
+@keyframes frost-flicker { 50% { opacity: 0.55; } }
+
+.lost-title { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: var(--red); }
+.lost-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  max-width: 30ch;
+  margin-bottom: 6px;
+}
+
+.btn-repair {
+  margin-top: 4px;
+  background: linear-gradient(180deg, #3fc3f7, #2ba6dd);
+  color: #06202e;
+  border-color: rgba(125, 211, 252, 0.5);
+  box-shadow: 0 0 22px -6px rgba(56, 189, 248, 0.6);
+  padding: 11px 18px;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+.btn-repair:hover { background: linear-gradient(180deg, #63d1fa, #38b5ea); }
+
+/* ─── recovery progress panel (reuses .step checkmark cascade) ─── */
+.recovery {
+  width: 100%;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(56, 189, 248, 0.1), rgba(56, 189, 248, 0.02)),
+    rgba(10, 15, 23, 0.9);
+  padding: 13px 14px;
+  margin-top: 6px;
+  text-align: left;
+  animation: rise-in 0.3s ease both;
+}
+.recovery--done   { border-color: rgba(94, 234, 212, 0.45); }
+.recovery--failed { border-color: rgba(248, 113, 113, 0.45); }
+
+.recovery-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ice);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+.recovery--done .recovery-title { color: var(--mint); }
+.recovery--done .recovery-title .live-dot { animation: none; }
+.recovery--failed .recovery-title { color: var(--red); }
+.recovery--failed .recovery-title .live-dot { animation: none; }
+
+.recovery-step { font-size: 12px; color: var(--text); margin-bottom: 12px; line-height: 1.45; }
+.recovery--failed .recovery-step { color: var(--red); }
+
+.recovery-steps { display: flex; align-items: flex-start; }
+.recovery-steps .step { min-width: 0; flex: 1; gap: 5px; }
+.recovery-steps .step-node { width: 20px; height: 20px; }
+.recovery-steps .step-label { font-size: 9px; }
+.recovery-steps .step-link { margin-top: 9px; min-width: 8px; }
+
+/* ─── revival celebration (inside phone) ─── */
+.revive-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  padding: 24px 10px;
+}
+.revive-title { font-size: 15px; font-weight: 600; color: var(--mint); }
+.revive-sub { font-size: 12px; color: var(--text-dim); max-width: 28ch; line-height: 1.5; }
+.revive-check { color: var(--mint); }
+
+/* ─── animated big checkmark ─── */
+.big-tick { width: 64px; height: 64px; }
+.big-tick circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  opacity: 0.35;
+  stroke-dasharray: 151;
+  stroke-dashoffset: 151;
+  animation: ring-draw 0.6s ease-out forwards;
+}
+.big-tick path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 34;
+  stroke-dashoffset: 34;
+  animation: tick-draw 0.4s ease-out 0.4s forwards;
+  filter: drop-shadow(0 0 10px currentColor);
+}
+@keyframes ring-draw { to { stroke-dashoffset: 0; } }
+@keyframes tick-draw { to { stroke-dashoffset: 0; } }
+
+/* ─── phone footer: subtle "report lost" control ─── */
+.phone-foot { flex: none; display: flex; justify-content: center; padding: 8px 0 2px; }
+.phone-lost-link {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.phone-lost-link:hover { color: var(--red); background: rgba(248, 113, 113, 0.06); }
+
 /* ════════ Device mode (?signer=alice|bob|carol) ════════
    A real phone/tablet is the bezel: one full-viewport signer view,
    large touch targets, safe-area aware. Mobile Safari is the target. */
@@ -1028,13 +1224,95 @@ body.mode-signer {
 
 .signer-foot {
   flex: none;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 10.5px;
   letter-spacing: 0.1em;
   color: var(--text-faint);
-  padding: 10px 0 4px;
+  padding: 10px 2px 4px;
   border-top: 1px solid var(--line-soft);
 }
+.signer-foot .foot-brand { margin-left: auto; }
+
+/* device-mode "report this device lost" — subtle but tappable */
+.device-lost-link {
+  background: none;
+  border: 1px solid var(--line-soft);
+  color: var(--text-faint);
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  padding: 9px 14px;
+  min-height: 40px;
+  border-radius: 10px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.device-lost-link:active { color: var(--red); border-color: rgba(248, 113, 113, 0.4); }
+
+/* ─── device mode: lost / recovering full screen ─── */
+body.device-down {
+  background:
+    radial-gradient(620px 340px at 50% -8%, rgba(248, 113, 113, 0.1), transparent 70%),
+    var(--bg);
+}
+.avatar--muted { filter: grayscale(0.85) brightness(0.72); box-shadow: none; }
+
+.device-lost-screen { justify-content: center; }
+.device-lost {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 8px 6px;
+}
+.device-lost-glyph {
+  font-size: 62px;
+  color: rgba(248, 113, 113, 0.6);
+  filter: drop-shadow(0 0 26px rgba(248, 113, 113, 0.4));
+  animation: frost-flicker 3.5s ease-in-out infinite;
+}
+.device-lost-title { font-size: 21px; font-weight: 600; color: var(--red); line-height: 1.25; }
+.device-lost-sub { font-size: 14px; color: var(--text-dim); max-width: 32ch; line-height: 1.5; }
+.device-lost .recovery { margin-top: 8px; }
+.device-lost .recovery-step { font-size: 14px; }
+.device-lost .recovery-steps .step-node { width: 26px; height: 26px; }
+.device-lost .recovery-steps .step-label { font-size: 10.5px; }
+.device-lost-note {
+  font-size: 12px;
+  color: var(--text-faint);
+  max-width: 34ch;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+/* ─── device mode: Restored ✓ celebration ─── */
+.device-restored {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 14px;
+  padding: 20px;
+  animation: rise-in 0.4s ease both;
+}
+.restored-check { color: var(--mint); }
+.restored-check .big-tick { width: 92px; height: 92px; }
+.device-restored-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--mint);
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 30px rgba(94, 234, 212, 0.4);
+}
+.device-restored-sub { font-size: 14px; color: var(--text-dim); line-height: 1.6; }
 
 /* ════════ Responsive ════════ */
 @media (max-width: 1180px) {
