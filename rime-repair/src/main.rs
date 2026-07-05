@@ -244,7 +244,30 @@ fn write_group_field(path: &Path, group: &str, field: &str, value: String) -> Re
         .as_table_mut()
         .ok_or_else(|| anyhow!("malformed group entry"))?
         .insert(field.into(), toml::Value::String(value));
-    std::fs::write(path, toml::to_string_pretty(&doc)?)?;
+    write_atomic_owner_only(path, &toml::to_string_pretty(&doc)?)
+}
+
+/// These files hold cleartext key shares: write 0600 and atomically (tempfile
+/// in the same directory, then rename), so no reader ever sees a
+/// world-readable or half-written config. Renaming also tightens the mode of
+/// configs frost-client originally created with the default umask.
+fn write_atomic_owner_only(path: &Path, contents: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("config");
+    let tmp = dir.join(format!(".{name}.rime-tmp"));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .with_context(|| format!("creating {}", tmp.display()))?;
+    f.write_all(contents.as_bytes())?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
     Ok(())
 }
 
