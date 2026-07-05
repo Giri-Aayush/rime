@@ -9,7 +9,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/00_env.sh"
 
 AK="${1:?usage: 20_address.sh <ak-hex>  (from: frost-client groups -c \$ALICE_CFG)}"
 
-zcash-sign generate --net "$RIME_NET" --ak "$AK" | tee "$RIME_RUNTIME/treasury_keys.txt"
+zcash-sign generate --network "$RIME_NET" --ak "$AK" | tee "$RIME_RUNTIME/treasury_keys.txt"
 echo
 echo "==> saved to $RIME_RUNTIME/treasury_keys.txt (gitignored)"
 echo "==> NEXT: scripts/30_wallet_init.sh <UFVK> <birthday-height>"

@@ -7,7 +7,7 @@
 # this step is waiting for.
 source "$(dirname "${BASH_SOURCE[0]}")/00_env.sh"
 
-zcash-sign sign -n "$RIME_NET" \
+zcash-sign sign --network "$RIME_NET" \
   --tx-plan "$RIME_RUNTIME/pczt.created" \
   -o "$RIME_RUNTIME/pczt.signed"
 
