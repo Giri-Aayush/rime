@@ -41,6 +41,12 @@ export interface AuditRow {
   at: string;
 }
 
+export interface Balance {
+  total_zat: number;
+  orchard_zat: number;
+  height: number | null;
+}
+
 // SSE payloads. request_id === 0 marks a treasury-level event (recovery).
 export interface RimeEvent {
   request_id: number;

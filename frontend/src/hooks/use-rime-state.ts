@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { api, subscribeEvents } from "@/lib/api";
 import type {
   AuditRow,
+  Balance,
   PaymentRequest,
   RimeEvent,
   Signer,
@@ -54,6 +55,7 @@ interface Recovery {
 
 interface Engine {
   treasury: Treasury | null;
+  balance: Balance | null;
   requests: PaymentRequest[];
   audit: AuditRow[];
   signers: Signer[];
@@ -67,6 +69,7 @@ interface Engine {
 function initialEngine(): Engine {
   return {
     treasury: null,
+    balance: null,
     requests: [],
     audit: [],
     signers: [],
@@ -131,6 +134,7 @@ export interface ActiveCeremony {
 export interface RimeState {
   me: number | null;
   treasury: Treasury | null;
+  balance: Balance | null;
   requests: PaymentRequest[];
   audit: AuditRow[];
   sse: Conn;
@@ -201,6 +205,18 @@ export function useRimeState(me: number | null): RimeState {
     }
   }, [readToken, commit]);
 
+  const refreshBalance = useCallback(async () => {
+    try {
+      const b = await api.balance(readToken);
+      if (b) {
+        engineRef.current.balance = b;
+        commit();
+      }
+    } catch {
+      /* balance is best-effort; keep last known */
+    }
+  }, [readToken, commit]);
+
   const refreshAudit = useCallback(async () => {
     try {
       const list = await api.audit(readToken);
@@ -233,8 +249,9 @@ export function useRimeState(me: number | null): RimeState {
       void refreshRequests();
       void refreshAudit();
       void refreshSigners();
+      void refreshBalance();
     }, 250);
-  }, [refreshRequests, refreshAudit, refreshSigners]);
+  }, [refreshRequests, refreshAudit, refreshSigners, refreshBalance]);
 
   /* ─── SSE event handlers ────────────────────────────────────────── */
 
@@ -357,6 +374,7 @@ export function useRimeState(me: number | null): RimeState {
     void refreshRequests();
     void refreshAudit();
     void refreshSigners();
+    void refreshBalance();
 
     const unsubscribe = subscribeEvents(
       readToken,
@@ -374,6 +392,7 @@ export function useRimeState(me: number | null): RimeState {
       void refreshRequests();
       void refreshAudit();
       void refreshSigners();
+      void refreshBalance();
     }, 4000);
 
     return () => {
@@ -387,6 +406,7 @@ export function useRimeState(me: number | null): RimeState {
     refreshRequests,
     refreshAudit,
     refreshSigners,
+    refreshBalance,
     onCeremonyEvent,
     onRecoveryEvent,
   ]);
@@ -566,6 +586,7 @@ export function useRimeState(me: number | null): RimeState {
   return {
     me,
     treasury: snapshot.treasury,
+    balance: snapshot.balance,
     requests,
     audit: snapshot.audit,
     sse: snapshot.sse,

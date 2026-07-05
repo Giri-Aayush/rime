@@ -1,5 +1,6 @@
 import type {
   AuditRow,
+  Balance,
   PaymentRequest,
   RimeEvent,
   Signer,
@@ -49,6 +50,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   treasury: (token: string) => req<Treasury>("/api/treasury", token),
+  balance: (token: string) => req<Balance>("/api/balance", token),
   requests: (token: string) => req<PaymentRequest[]>("/api/requests", token),
   signers: (token: string) => req<Signer[]>("/api/signers", token),
   audit: (token: string) => req<AuditRow[]>("/api/audit", token),

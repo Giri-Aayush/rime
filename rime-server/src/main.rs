@@ -5,6 +5,7 @@
 //! tools (frost-client, frostd, zcash-sign, zcash-devtool) as subprocesses —
 //! see pipeline.rs. The server never touches key shares.
 
+mod balance;
 mod config;
 mod notify;
 mod pipeline;
@@ -42,6 +43,7 @@ struct AppState {
     cfg: Option<Arc<RimeConfig>>,
     events: broadcast::Sender<String>,
     discord: Option<String>,
+    balance: Arc<balance::BalanceCache>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,11 +109,13 @@ async fn main() -> anyhow::Result<()> {
         cfg,
         events,
         discord,
+        balance: Arc::new(balance::BalanceCache::new()),
     };
 
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/treasury", get(treasury))
+        .route("/api/balance", get(balance_handler))
         .route("/api/requests", get(list_requests).post(create_request))
         .route("/api/requests/{id}/decide", post(decide))
         .route("/api/sse-ticket", post(sse_ticket))
@@ -196,6 +200,24 @@ async fn treasury(
         })),
         None => Json(json!({ "configured": false })),
     })
+}
+
+async fn balance_handler(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_signer(&st.db.lock().unwrap(), &headers, None)?;
+    let Some(cfg) = &st.cfg else {
+        return Err((StatusCode::PRECONDITION_FAILED, "no wallet configured".into()));
+    };
+    match st.balance.get(&cfg.wallet_dir).await {
+        Ok(b) => Ok(Json(json!({
+            "total_zat": b.total_zat,
+            "orchard_zat": b.orchard_zat,
+            "height": b.height,
+        }))),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
+    }
 }
 
 async fn create_request(

@@ -1,8 +1,8 @@
 "use client";
 
-// Treasury balance + the Orchard-only deposit address. There's no balance
-// endpoint yet, so the figure is an em-dash with an honest caption. The
-// address carries a guard note — depositing to a Sapling receiver would
+// Treasury balance + the Orchard-only deposit address. Balance comes from the
+// watch-only wallet via /api/balance; until the first deposit lands it reads
+// 0. The address carries a guard note — depositing to a Sapling receiver would
 // strand the funds.
 
 import { useState } from "react";
@@ -14,10 +14,17 @@ import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/section-label";
 import type { RimeState } from "@/hooks/use-rime-state";
 
+// zatoshis → a trimmed decimal string (no trailing-zero noise, but never bare).
+function fmtBalance(zat: number): string {
+  const s = (zat / 100_000_000).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+}
+
 export function TreasuryCard({ rime }: { rime: RimeState }) {
-  const { treasury, unit, threshold } = rime;
+  const { treasury, balance, unit, threshold } = rime;
   const signerCount = treasury?.signers?.length ?? 3;
   const address = treasury?.address ?? "";
+  const funded = !!balance && balance.total_zat > 0;
   const [copied, setCopied] = useState(false);
 
   async function copyAddress() {
@@ -49,7 +56,7 @@ export function TreasuryCard({ rime }: { rime: RimeState }) {
         <SectionLabel>Treasury balance</SectionLabel>
         <div className="flex items-baseline gap-2.5">
           <span className="font-mono text-[40px] font-medium leading-none tracking-tight text-foreground [text-shadow:0_0_30px_color-mix(in_oklab,var(--primary)_18%,transparent)]">
-            —
+            {balance ? fmtBalance(balance.total_zat) : "—"}
           </span>
           <span className="font-mono text-sm tracking-[0.1em] text-primary">
             {unit}
@@ -57,7 +64,7 @@ export function TreasuryCard({ rime }: { rime: RimeState }) {
         </div>
         <p className="text-xs text-muted-foreground">
           <span className="font-mono uppercase tracking-[0.1em] text-muted-foreground/70">
-            awaiting first deposit
+            {funded ? "shielded · orchard" : "awaiting first deposit"}
           </span>{" "}
           — no single person can move these funds; any{" "}
           <strong className="font-semibold text-primary">
