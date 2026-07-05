@@ -1,24 +1,41 @@
 "use client";
 
-// The signature motif, borrowed from wavelength.cx and reinterpreted for Rime:
-// candy-colored "signing routes" — rounded orthogonal traces, like subway
-// lines or circuit paths — that read as key shares routing toward one
-// signature. Purely decorative, absolutely positioned, pointer-events-none.
-// Kept low-opacity so it sets atmosphere without fighting the data.
+// The signature motif, faithful to wavelength.cx: candy-colored routing
+// traces — rounded orthogonal paths, like subway lines or circuit routes —
+// reinterpreted for Rime as key shares routing toward one signature.
+//
+// Prominent but restrained: the traces carry real visual weight, and a small
+// number of slow "signal" pulses travel each route (SMIL animateMotion —
+// smooth, GPU-cheap, no JS). The motion is deliberately minimal so the whole
+// thing reads clean, sleek, professional — not a screensaver.
 
-const ROUTES = [
-  { d: "M -20 60 H 120 Q 160 60 160 100 V 240 Q 160 280 200 280 H 520", color: "var(--mint)", w: 3, dash: false },
-  { d: "M 1460 40 H 1240 Q 1200 40 1200 80 V 200 Q 1200 240 1160 240 H 900", color: "var(--violet)", w: 3, dash: false },
-  { d: "M -20 200 H 60 Q 100 200 100 240 V 420", color: "var(--blue)", w: 2.5, dash: true },
-  { d: "M 1460 340 H 1300 Q 1260 340 1260 300 V 140", color: "var(--mint)", w: 2, dash: true },
+type Route = {
+  d: string;
+  color: string;
+  w: number;
+  /** seconds for a signal to traverse; longer = calmer */
+  dur: number;
+  delay?: number;
+};
+
+// Routes framing the hero: three converge from the left (the three signers),
+// two arc in from the right (the treasury). Rounded corners throughout.
+const ROUTES: Route[] = [
+  { d: "M -40 70 H 150 Q 196 70 196 116 V 250 Q 196 300 246 300 H 560", color: "var(--mint)", w: 2.5, dur: 7 },
+  { d: "M -40 150 H 96 Q 142 150 142 196 V 250", color: "var(--blue)", w: 2, dur: 9, delay: 1.5 },
+  { d: "M -40 300 H 60 Q 106 300 106 254 V 150", color: "var(--violet)", w: 2, dur: 8, delay: 3 },
+  { d: "M 1480 60 H 1250 Q 1204 60 1204 106 V 210 Q 1204 256 1158 256 H 900", color: "var(--violet)", w: 2.5, dur: 8.5, delay: 0.8 },
+  { d: "M 1480 340 H 1320 Q 1274 340 1274 294 V 150", color: "var(--mint)", w: 2, dur: 10, delay: 2.2 },
 ];
 
-// Little "nodes" that sit on the routes, like connection points.
+// Junction nodes where routes turn — quiet connection points.
 const NODES = [
-  { x: 160, y: 100, color: "var(--mint)" },
-  { x: 200, y: 280, color: "var(--mint)" },
-  { x: 1200, y: 80, color: "var(--violet)" },
-  { x: 100, y: 240, color: "var(--blue)" },
+  { x: 196, y: 116, color: "var(--mint)" },
+  { x: 246, y: 300, color: "var(--mint)" },
+  { x: 142, y: 196, color: "var(--blue)" },
+  { x: 106, y: 254, color: "var(--violet)" },
+  { x: 1204, y: 106, color: "var(--violet)" },
+  { x: 1274, y: 294, color: "var(--mint)" },
 ];
 
 export function RouteLines({ className = "" }: { className?: string }) {
@@ -33,28 +50,47 @@ export function RouteLines({ className = "" }: { className?: string }) {
         preserveAspectRatio="xMidYMin slice"
         fill="none"
       >
+        {/* static traces — carry the visual weight */}
         {ROUTES.map((r, i) => (
           <path
-            key={i}
+            key={`t${i}`}
             d={r.d}
             stroke={r.color}
             strokeWidth={r.w}
             strokeLinecap="round"
             strokeLinejoin="round"
-            strokeDasharray={r.dash ? "2 10" : undefined}
-            opacity={0.5}
-            style={
-              r.dash
-                ? { animation: `rime-route-flow ${8 + i * 2}s linear infinite` }
-                : undefined
-            }
+            opacity={0.42}
           />
         ))}
+
+        {/* junction nodes */}
         {NODES.map((n, i) => (
-          <g key={i}>
-            <circle cx={n.x} cy={n.y} r={7} fill={n.color} opacity={0.14} />
-            <circle cx={n.x} cy={n.y} r={2.5} fill={n.color} opacity={0.7} />
+          <g key={`n${i}`}>
+            <circle cx={n.x} cy={n.y} r={8} fill={n.color} opacity={0.1} />
+            <circle cx={n.x} cy={n.y} r={2.5} fill={n.color} opacity={0.65} />
           </g>
+        ))}
+
+        {/* slow travelling signals — the only motion, one per route */}
+        {ROUTES.map((r, i) => (
+          <circle key={`s${i}`} r={3} fill={r.color}>
+            <animateMotion
+              path={r.d}
+              dur={`${r.dur}s`}
+              begin={`${r.delay ?? 0}s`}
+              repeatCount="indefinite"
+              rotate="auto"
+              calcMode="linear"
+            />
+            <animate
+              attributeName="opacity"
+              values="0;1;1;0"
+              keyTimes="0;0.08;0.9;1"
+              dur={`${r.dur}s`}
+              begin={`${r.delay ?? 0}s`}
+              repeatCount="indefinite"
+            />
+          </circle>
         ))}
       </svg>
     </div>

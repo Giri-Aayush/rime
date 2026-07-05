@@ -35,28 +35,28 @@ export function HeaderBar({ rime }: { rime: RimeState }) {
 
   return (
     <header className="relative isolate overflow-hidden border-b border-border">
-      <RouteLines className="opacity-70 [mask-image:linear-gradient(to_bottom,black_20%,transparent)]" />
+      <RouteLines className="[mask-image:linear-gradient(to_bottom,black_35%,transparent)]" />
 
-      <div className="relative mx-auto flex max-w-[1720px] flex-wrap items-end justify-between gap-8 px-7 pb-9 pt-10">
+      <div className="relative mx-auto flex max-w-[1720px] flex-wrap items-end justify-between gap-8 px-7 pb-12 pt-14">
         <div className="min-w-0">
           <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-primary/90">
             <span className="size-1 rounded-full bg-primary" aria-hidden="true" />
             Threshold treasury
           </div>
 
-          <div className="mt-3 flex items-center gap-3.5">
+          <div className="mt-4 flex items-center gap-3.5">
             <span
-              className="text-[38px] leading-none text-primary [filter:drop-shadow(0_0_20px_color-mix(in_oklab,var(--primary)_50%,transparent))]"
+              className="text-[34px] leading-none text-primary [filter:drop-shadow(0_0_20px_color-mix(in_oklab,var(--primary)_50%,transparent))]"
               aria-hidden="true"
             >
               ❄
             </span>
-            <h1 className="font-serif text-[64px] leading-[0.9] tracking-[-0.02em] text-foreground">
+            <h1 className="font-sans text-[62px] font-semibold leading-[0.88] tracking-[-0.045em] text-foreground">
               Rime
             </h1>
           </div>
 
-          <p className="mt-3 max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-4 max-w-[44ch] text-[15px] leading-relaxed text-muted-foreground">
             A frost-sealed treasury for teams — no single person can move the
             money, any two signatures can.
           </p>
