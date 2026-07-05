@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS approvals (
     PRIMARY KEY (request_id, signer_id)
 );
 
+-- Single-use, short-lived tickets so EventSource (which cannot set an
+-- Authorization header) never carries the real signer token in a URL.
+CREATE TABLE IF NOT EXISTS sse_tickets (
+    ticket     TEXT PRIMARY KEY,
+    signer_id  INTEGER NOT NULL REFERENCES signers(id),
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     event      TEXT NOT NULL,

@@ -106,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/treasury", get(treasury))
         .route("/api/requests", get(list_requests).post(create_request))
         .route("/api/requests/{id}/decide", post(decide))
+        .route("/api/sse-ticket", post(sse_ticket))
         .route("/api/events", get(sse_events))
         .route("/api/audit", get(audit))
         .with_state(state);
@@ -349,13 +350,51 @@ fn spawn_ceremony(st: AppState, id: i64) {
     });
 }
 
+/// Issue a single-use, 60-second ticket for the SSE stream. Authenticated
+/// with the normal bearer header; the ticket is what goes in the URL, so the
+/// real signer token never appears in access logs or browser history.
+async fn sse_ticket(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let db = st.db.lock().unwrap();
+    let signer_id = require_signer(&db, &headers, None)?;
+    db.execute("DELETE FROM sse_tickets WHERE expires_at <= datetime('now')", [])
+        .map_err(internal)?;
+    let ticket: String = db
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))
+        .map_err(internal)?;
+    db.execute(
+        "INSERT INTO sse_tickets (ticket, signer_id, expires_at) VALUES (?1, ?2, datetime('now', '+60 seconds'))",
+        rusqlite::params![ticket, signer_id],
+    )
+    .map_err(internal)?;
+    Ok(Json(json!({ "ticket": ticket })))
+}
+
 async fn sse_events(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
-    // EventSource can't set headers, so SSE also accepts ?token=.
-    require_signer(&st.db.lock().unwrap(), &headers, q.get("token").map(|s| s.as_str()))?;
+    {
+        let db = st.db.lock().unwrap();
+        // Bearer header for CLI clients; one-time ?ticket= for EventSource.
+        if require_signer(&db, &headers, None).is_err() {
+            let ticket = q
+                .get("ticket")
+                .ok_or((StatusCode::UNAUTHORIZED, "missing ticket".to_string()))?;
+            let redeemed = db
+                .execute(
+                    "DELETE FROM sse_tickets WHERE ticket = ?1 AND expires_at > datetime('now')",
+                    [ticket],
+                )
+                .map_err(internal)?;
+            if redeemed != 1 {
+                return Err((StatusCode::UNAUTHORIZED, "invalid or expired ticket".into()));
+            }
+        }
+    }
     let rx = st.events.subscribe();
     let stream = BroadcastStream::new(rx)
         .filter_map(|msg| msg.ok())
