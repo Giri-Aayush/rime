@@ -112,7 +112,21 @@ async fn main() -> anyhow::Result<()> {
         balance: Arc::new(balance::BalanceCache::new()),
     };
 
-    let app = Router::new()
+    let app = build_app(state);
+
+    // Default stays loopback; set RIME_BIND=0.0.0.0:8787 for the multi-device
+    // demo so phones on the same wifi can reach their signer views.
+    let addr = std::env::var("RIME_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
+    tracing::info!("rime-server listening on http://{addr}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Build the router for a given state. Extracted so tests can exercise the
+/// full API surface in-process (via `oneshot`) without binding a socket.
+fn build_app(state: AppState) -> Router {
+    Router::new()
         .route("/api/health", get(health))
         .route("/api/treasury", get(treasury))
         .route("/api/balance", get(balance_handler))
@@ -135,15 +149,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }),
         ))
-        .with_state(state);
-
-    // Default stays loopback; set RIME_BIND=0.0.0.0:8787 for the multi-device
-    // demo so phones on the same wifi can reach their signer views.
-    let addr = std::env::var("RIME_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
-    tracing::info!("rime-server listening on http://{addr}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+        .with_state(state)
 }
 
 /// Sync signers from config on every boot (upsert by id) so token rotation
@@ -648,4 +654,233 @@ fn log_event(db: &Connection, event: &str, detail: &str) {
 
 fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    //! In-process API tests over the real router (via `oneshot`) — no socket,
+    //! no external tools. With no signing config the server runs workflow-only,
+    //! so the ceremony is skipped and these exercise the money-path state
+    //! machine (quorum, guards, auth) deterministically.
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    const ALICE: &str = "dev-token-alice";
+    const BOB: &str = "dev-token-bob";
+    const CAROL: &str = "dev-token-carol";
+
+    fn state(cfg: Option<config::RimeConfig>) -> AppState {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        seed_signers(&conn, cfg.as_ref()).unwrap();
+        let (events, _) = broadcast::channel(256);
+        AppState {
+            db: Arc::new(Mutex::new(conn)),
+            cfg: cfg.map(Arc::new),
+            events,
+            discord: None,
+            balance: Arc::new(balance::BalanceCache::new()),
+        }
+    }
+
+    fn mini_cfg() -> config::RimeConfig {
+        let signer = |id, name: &str, tok: &str| config::SignerCfg {
+            id,
+            name: name.into(),
+            pubkey: "00".into(),
+            frost_config: format!("runtime/{}.toml", name.to_lowercase()),
+            token: tok.into(),
+        };
+        config::RimeConfig {
+            network: "test".into(),
+            wallet_dir: "runtime/wallet-test".into(),
+            group: "00".into(),
+            frostd_url: "localhost:2744".into(),
+            ca_cert: "runtime/tls/ca.crt".into(),
+            runtime_dir: "runtime".into(),
+            treasury_address: "utest1demo".into(),
+            discord_webhook: None,
+            signers: vec![
+                signer(1, "Alice", ALICE),
+                signer(2, "Bob", BOB),
+                signer(3, "Carol", CAROL),
+            ],
+        }
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut b = Request::builder().method(method).uri(path);
+        if let Some(t) = bearer {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        let req = match body {
+            Some(v) => b
+                .header("content-type", "application/json")
+                .body(Body::from(v.to_string()))
+                .unwrap(),
+            None => b.body(Body::empty()).unwrap(),
+        };
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+        };
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn reads_require_a_signer_token() {
+        let app = build_app(state(None));
+        let (unauth, _) = send(&app, "GET", "/api/requests", None, None).await;
+        assert_eq!(unauth, StatusCode::UNAUTHORIZED);
+        let (bad, _) = send(&app, "GET", "/api/requests", Some("nope"), None).await;
+        assert_eq!(bad, StatusCode::UNAUTHORIZED);
+        let (ok, body) = send(&app, "GET", "/api/requests", Some(ALICE), None).await;
+        assert_eq!(ok, StatusCode::OK);
+        assert_eq!(body.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn quorum_fires_once_even_on_a_late_third_approval() {
+        let app = build_app(state(None)); // no cfg → ceremony skipped, status stays "quorum"
+        let (c, _) = send(
+            &app,
+            "POST",
+            "/api/requests",
+            None,
+            Some(json!({"recipient":"utest1x","amount_zat":50000,"reason":"t","signer_token":BOB})),
+        )
+        .await;
+        assert_eq!(c, StatusCode::OK);
+
+        let approve = |tok: &'static str| {
+            let app = app.clone();
+            async move {
+                send(
+                    &app,
+                    "POST",
+                    "/api/requests/1/decide",
+                    None,
+                    Some(json!({"signer_token":tok,"decision":"approve"})),
+                )
+                .await
+            }
+        };
+        let (_, a1) = approve(ALICE).await;
+        assert_eq!(a1["approvals"], 1);
+        assert_eq!(a1["status"], "pending");
+        let (_, a2) = approve(BOB).await;
+        assert_eq!(a2["approvals"], 2);
+        assert_eq!(a2["status"], "quorum");
+        // late third approval must NOT re-fire the ceremony
+        let (_, a3) = approve(CAROL).await;
+        assert_eq!(a3["approvals"], 3);
+
+        let (_, audit) = send(&app, "GET", "/api/audit", Some(ALICE), None).await;
+        let quorum_events = audit
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "request.quorum")
+            .count();
+        assert_eq!(quorum_events, 1, "quorum must fire exactly once");
+    }
+
+    #[tokio::test]
+    async fn reject_marks_the_request_rejected() {
+        let app = build_app(state(None));
+        send(
+            &app,
+            "POST",
+            "/api/requests",
+            None,
+            Some(json!({"recipient":"utest1x","amount_zat":1,"reason":"t","signer_token":BOB})),
+        )
+        .await;
+        let (_, d) = send(
+            &app,
+            "POST",
+            "/api/requests/1/decide",
+            None,
+            Some(json!({"signer_token":ALICE,"decision":"reject"})),
+        )
+        .await;
+        assert_eq!(d["status"], "rejected");
+    }
+
+    #[tokio::test]
+    async fn mark_lost_refuses_to_drop_below_threshold_and_revokes_the_token() {
+        let app = build_app(state(None));
+        let (a, _) = send(
+            &app,
+            "POST",
+            "/api/signers/3/mark-lost",
+            None,
+            Some(json!({"signer_token":ALICE})),
+        )
+        .await;
+        assert_eq!(a, StatusCode::OK);
+        // Carol's token is now revoked
+        let (revoked, _) = send(&app, "GET", "/api/requests", Some(CAROL), None).await;
+        assert_eq!(revoked, StatusCode::UNAUTHORIZED);
+        // marking a second signer lost would leave <2 → refused
+        let (b, _) = send(
+            &app,
+            "POST",
+            "/api/signers/2/mark-lost",
+            None,
+            Some(json!({"signer_token":ALICE})),
+        )
+        .await;
+        assert_eq!(b, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn repair_requires_config_and_a_lost_target() {
+        // no cfg → repair is a precondition failure
+        let app = build_app(state(None));
+        let (no_cfg, _) = send(
+            &app,
+            "POST",
+            "/api/signers/3/repair",
+            None,
+            Some(json!({"signer_token":ALICE})),
+        )
+        .await;
+        assert_eq!(no_cfg, StatusCode::PRECONDITION_FAILED);
+
+        // with cfg but the target isn't lost → conflict (no ceremony spawned)
+        let app = build_app(state(Some(mini_cfg())));
+        let (not_lost, _) = send(
+            &app,
+            "POST",
+            "/api/signers/1/repair",
+            None,
+            Some(json!({"signer_token":BOB})),
+        )
+        .await;
+        assert_eq!(not_lost, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn sse_requires_auth_and_rejects_bad_tickets() {
+        let app = build_app(state(None));
+        let (t_unauth, _) = send(&app, "POST", "/api/sse-ticket", None, None).await;
+        assert_eq!(t_unauth, StatusCode::UNAUTHORIZED);
+        let (ev_bad, _) = send(&app, "GET", "/api/events?ticket=deadbeef", None, None).await;
+        assert_eq!(ev_bad, StatusCode::UNAUTHORIZED);
+    }
 }
