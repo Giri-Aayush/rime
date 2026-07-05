@@ -111,9 +111,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/audit", get(audit))
         .with_state(state);
 
-    let addr = "127.0.0.1:8787";
+    // Default stays loopback; set RIME_BIND=0.0.0.0:8787 for the multi-device
+    // demo so phones on the same wifi can reach their signer views.
+    let addr = std::env::var("RIME_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     tracing::info!("rime-server listening on http://{addr}");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
