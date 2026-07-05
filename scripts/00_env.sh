@@ -21,8 +21,10 @@ export CAROL_CFG="$RIME_RUNTIME/carol.toml"
 # frostd coordination server (local for the demo)
 export FROSTD_URL="${FROSTD_URL:-localhost:2744}"
 
-# Watch-only wallet directory (zcash-devtool)
-export WALLET_DIR="$RIME_RUNTIME/wallet"
+# Watch-only wallet directory (zcash-devtool) — one per network
+export WALLET_DIR="$RIME_RUNTIME/wallet-$RIME_NET"
 
-# Public lightwalletd endpoint
+# Public lightwalletd endpoint. The named "zecrocks" resolves per-network
+# inside zcash-devtool (zec.rocks for main, testnet.zec.rocks for test —
+# selected by the UFVK's network). Custom values must be host:port.
 export LIGHTWALLETD="${LIGHTWALLETD:-zecrocks}"
