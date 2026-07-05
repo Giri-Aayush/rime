@@ -466,10 +466,9 @@ async fn mark_lost(
     let name = {
         let db = st.db.lock().unwrap();
         let actor = signer_by_token(&db, &t.signer_token)?;
-        if actor == id {
-            // Fine in practice (you know you lost your own phone), but the
-            // report should come from a device that still has a token.
-        }
+        let actor_name: String = db
+            .query_row("SELECT name FROM signers WHERE id = ?1", [actor], |r| r.get(0))
+            .map_err(internal)?;
         let active: i64 = db
             .query_row("SELECT COUNT(*) FROM signers WHERE status != 'lost'", [], |r| r.get(0))
             .map_err(internal)?;
@@ -488,7 +487,7 @@ async fn mark_lost(
         let name: String = db
             .query_row("SELECT name FROM signers WHERE id = ?1", [id], |r| r.get(0))
             .map_err(internal)?;
-        log_event(&db, "recovery.lost", &format!("{name}'s device reported lost"));
+        log_event(&db, "recovery.lost", &format!("{name}'s device reported lost by {actor_name}"));
         name
     };
     let _ = st
@@ -509,7 +508,15 @@ async fn repair_signer(
     };
     let name = {
         let db = st.db.lock().unwrap();
-        signer_by_token(&db, &t.signer_token)?;
+        let actor = signer_by_token(&db, &t.signer_token)?;
+        // Recovery must be initiated by a signer other than the lost one, so a
+        // single stolen token for the lost device can't drive its own repair.
+        if actor == id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "repair must be initiated by another active signer".into(),
+            ));
+        }
         let (name, status): (String, String) = db
             .query_row("SELECT name, status FROM signers WHERE id = ?1", [id], |r| {
                 Ok((r.get(0)?, r.get(1)?))
