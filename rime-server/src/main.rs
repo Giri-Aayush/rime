@@ -7,6 +7,7 @@
 
 mod config;
 mod pipeline;
+mod recovery;
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -109,6 +110,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sse-ticket", post(sse_ticket))
         .route("/api/events", get(sse_events))
         .route("/api/audit", get(audit))
+        .route("/api/signers", get(signers))
+        .route("/api/signers/{id}/mark-lost", post(mark_lost))
+        .route("/api/signers/{id}/repair", post(repair_signer))
         .fallback_service(tower_http::services::ServeDir::new("web"))
         .with_state(state);
 
@@ -422,6 +426,128 @@ async fn audit(
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
     Ok(Json(json!(rows)))
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenOnly {
+    signer_token: String,
+}
+
+async fn signers(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let db = st.db.lock().unwrap();
+    require_signer(&db, &headers, None)?;
+    let mut stmt = db
+        .prepare("SELECT id, name, status FROM signers ORDER BY id")
+        .map_err(internal)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?,
+                "name": r.get::<_, String>(1)?,
+                "status": r.get::<_, String>(2)?,
+            }))
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+    Ok(Json(json!(rows)))
+}
+
+/// Declare a signer's device lost. Their token stops working immediately.
+/// Refuses to drop the group below the signing threshold.
+async fn mark_lost(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(t): Json<TokenOnly>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = {
+        let db = st.db.lock().unwrap();
+        let actor = signer_by_token(&db, &t.signer_token)?;
+        if actor == id {
+            // Fine in practice (you know you lost your own phone), but the
+            // report should come from a device that still has a token.
+        }
+        let active: i64 = db
+            .query_row("SELECT COUNT(*) FROM signers WHERE status != 'lost'", [], |r| r.get(0))
+            .map_err(internal)?;
+        if active - 1 < QUORUM {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("cannot mark another signer lost: fewer than {QUORUM} signers would remain"),
+            ));
+        }
+        let changed = db
+            .execute("UPDATE signers SET status = 'lost' WHERE id = ?1 AND status != 'lost'", [id])
+            .map_err(internal)?;
+        if changed != 1 {
+            return Err((StatusCode::CONFLICT, "signer is already lost or unknown".into()));
+        }
+        let name: String = db
+            .query_row("SELECT name FROM signers WHERE id = ?1", [id], |r| r.get(0))
+            .map_err(internal)?;
+        log_event(&db, "recovery.lost", &format!("{name}'s device reported lost"));
+        name
+    };
+    let _ = st
+        .events
+        .send(json!({"request_id": 0, "step": "recovery.lost", "detail": name}).to_string());
+    Ok(Json(json!({ "id": id, "status": "lost" })))
+}
+
+/// Repair a lost signer: the remaining signers regenerate the share (RTS),
+/// then every share is rotated so the lost one becomes a dead key.
+async fn repair_signer(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(t): Json<TokenOnly>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let Some(cfg) = st.cfg.clone() else {
+        return Err((StatusCode::PRECONDITION_FAILED, "server has no signing config".into()));
+    };
+    let name = {
+        let db = st.db.lock().unwrap();
+        signer_by_token(&db, &t.signer_token)?;
+        let (name, status): (String, String) = db
+            .query_row("SELECT name, status FROM signers WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(|_| (StatusCode::NOT_FOUND, "unknown signer".to_string()))?;
+        if status != "lost" {
+            return Err((StatusCode::CONFLICT, format!("{name} is not marked lost")));
+        }
+        name
+    };
+
+    let st2 = st.clone();
+    tokio::spawn(async move {
+        let emit = |step: &str, detail: &str| {
+            let db = st2.db.lock().unwrap();
+            log_event(&db, step, detail);
+            let _ = st2
+                .events
+                .send(json!({"request_id": 0, "step": step, "detail": detail}).to_string());
+        };
+        emit("recovery.repair", &format!("{name}: remaining signers are rebuilding the share"));
+        if let Err(e) = recovery::repair(&cfg, id).await {
+            emit("recovery.failed", &format!("{name}: {e:#}"));
+            return;
+        }
+        emit("recovery.refresh", "rotating all shares — the lost share becomes a dead key");
+        if let Err(e) = recovery::refresh(&cfg).await {
+            emit("recovery.failed", &format!("refresh: {e:#}"));
+            return;
+        }
+        {
+            let db = st2.db.lock().unwrap();
+            db.execute("UPDATE signers SET status = 'active' WHERE id = ?1", [id]).ok();
+        }
+        emit("recovery.done", &format!("{name} restored on a new device; treasury address unchanged"));
+    });
+
+    Ok(Json(json!({ "id": id, "status": "repairing" })))
 }
 
 /// Authenticate any known signer for read access, via `Authorization:
