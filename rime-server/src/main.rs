@@ -1,27 +1,43 @@
 //! rime-server — the treasury workflow engine.
 //!
 //! Owns the request → approvals → ceremony → broadcast state machine and the
-//! audit log. Cryptographic operations are delegated to the frozen scripts in
-//! `scripts/`, which wrap the Zcash Foundation's reference tools
-//! (frost-client, frostd, zcash-sign, zcash-devtool). The server never touches
-//! key shares.
+//! audit log. Cryptographic operations are delegated to the ZF reference
+//! tools (frost-client, frostd, zcash-sign, zcash-devtool) as subprocesses —
+//! see pipeline.rs. The server never touches key shares.
 
+mod config;
+mod pipeline;
+
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::sse::{Event, Sse},
     routing::{get, post},
     Json, Router,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+
+use config::RimeConfig;
 
 /// 2-of-3: the number of approvals that triggers a signing ceremony.
 const QUORUM: i64 = 2;
 
 type Db = Arc<Mutex<Connection>>;
+
+#[derive(Clone)]
+struct AppState {
+    db: Db,
+    cfg: Option<Arc<RimeConfig>>,
+    events: broadcast::Sender<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct NewRequest {
@@ -61,15 +77,36 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all("runtime")?;
     let conn = Connection::open("runtime/rime.db")?;
     conn.execute_batch(include_str!("schema.sql"))?;
-    seed_signers(&conn)?;
-    let db: Db = Arc::new(Mutex::new(conn));
+
+    let cfg_path = std::env::var("RIME_SERVER_CONFIG")
+        .unwrap_or_else(|_| "runtime/rime-server.toml".into());
+    let cfg = match RimeConfig::load(&cfg_path) {
+        Ok(c) => {
+            tracing::info!(path = %cfg_path, network = %c.network, "signing config loaded");
+            Some(Arc::new(c))
+        }
+        Err(e) => {
+            tracing::warn!(path = %cfg_path, "no signing config ({e}); workflow-only mode");
+            None
+        }
+    };
+    seed_signers(&conn, cfg.as_deref())?;
+
+    let (events, _) = broadcast::channel(256);
+    let state = AppState {
+        db: Arc::new(Mutex::new(conn)),
+        cfg,
+        events,
+    };
 
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/treasury", get(treasury))
         .route("/api/requests", get(list_requests).post(create_request))
         .route("/api/requests/{id}/decide", post(decide))
+        .route("/api/events", get(sse_events))
         .route("/api/audit", get(audit))
-        .with_state(db);
+        .with_state(state);
 
     let addr = "127.0.0.1:8787";
     tracing::info!("rime-server listening on http://{addr}");
@@ -78,17 +115,29 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Demo signers. Tokens are placeholders until real per-signer provisioning
-/// lands with the signer daemons.
-fn seed_signers(conn: &Connection) -> anyhow::Result<()> {
+/// Seed signers from config when present; dev placeholders otherwise.
+fn seed_signers(conn: &Connection, cfg: Option<&RimeConfig>) -> anyhow::Result<()> {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM signers", [], |r| r.get(0))?;
-    if n == 0 {
-        conn.execute_batch(
-            "INSERT INTO signers (id, name, token) VALUES
-                (1, 'Alice', 'dev-token-alice'),
-                (2, 'Bob',   'dev-token-bob'),
-                (3, 'Carol', 'dev-token-carol');",
-        )?;
+    if n > 0 {
+        return Ok(());
+    }
+    match cfg {
+        Some(c) => {
+            for s in &c.signers {
+                conn.execute(
+                    "INSERT INTO signers (id, name, token) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![s.id, s.name, s.token],
+                )?;
+            }
+        }
+        None => {
+            conn.execute_batch(
+                "INSERT INTO signers (id, name, token) VALUES
+                    (1, 'Alice', 'dev-token-alice'),
+                    (2, 'Bob',   'dev-token-bob'),
+                    (3, 'Carol', 'dev-token-carol');",
+            )?;
+        }
     }
     Ok(())
 }
@@ -97,11 +146,23 @@ async fn health() -> Json<serde_json::Value> {
     Json(json!({ "ok": true, "service": "rime-server" }))
 }
 
+async fn treasury(State(st): State<AppState>) -> Json<serde_json::Value> {
+    match &st.cfg {
+        Some(c) => Json(json!({
+            "network": c.network,
+            "address": c.treasury_address,
+            "threshold": QUORUM,
+            "signers": c.signers.iter().map(|s| &s.name).collect::<Vec<_>>(),
+        })),
+        None => Json(json!({ "configured": false })),
+    }
+}
+
 async fn create_request(
-    State(db): State<Db>,
+    State(st): State<AppState>,
     Json(req): Json<NewRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = db.lock().unwrap();
+    let db = st.db.lock().unwrap();
     let signer_id = signer_by_token(&db, &req.signer_token)?;
     db.execute(
         "INSERT INTO requests (recipient, amount_zat, reason, created_by) VALUES (?1, ?2, ?3, ?4)",
@@ -110,11 +171,14 @@ async fn create_request(
     .map_err(internal)?;
     let id = db.last_insert_rowid();
     log_event(&db, "request.created", &format!("#{id} {} zat: {}", req.amount_zat, req.reason));
+    let _ = st.events.send(json!({"request_id": id, "step": "created", "detail": req.reason}).to_string());
     Ok(Json(json!({ "id": id, "status": "pending" })))
 }
 
-async fn list_requests(State(db): State<Db>) -> Result<Json<Vec<PaymentRequest>>, (StatusCode, String)> {
-    let db = db.lock().unwrap();
+async fn list_requests(
+    State(st): State<AppState>,
+) -> Result<Json<Vec<PaymentRequest>>, (StatusCode, String)> {
+    let db = st.db.lock().unwrap();
     let mut stmt = db
         .prepare(
             "SELECT r.id, r.recipient, r.amount_zat, r.reason, r.status, r.txid, r.created_at,
@@ -142,48 +206,130 @@ async fn list_requests(State(db): State<Db>) -> Result<Json<Vec<PaymentRequest>>
 }
 
 async fn decide(
-    State(db): State<Db>,
+    State(st): State<AppState>,
     Path(id): Path<i64>,
     Json(d): Json<Decision>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     if d.decision != "approve" && d.decision != "reject" {
         return Err((StatusCode::BAD_REQUEST, "decision must be approve|reject".into()));
     }
-    let db = db.lock().unwrap();
-    let signer_id = signer_by_token(&db, &d.signer_token)?;
-    db.execute(
-        "INSERT OR REPLACE INTO approvals (request_id, signer_id, decision) VALUES (?1, ?2, ?3)",
-        rusqlite::params![id, signer_id, d.decision],
-    )
-    .map_err(internal)?;
-    log_event(&db, "request.decision", &format!("#{id} signer {signer_id}: {}", d.decision));
-
-    let approvals: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM approvals WHERE request_id = ?1 AND decision = 'approve'",
-            [id],
-            |r| r.get(0),
+    let (approvals, status) = {
+        let db = st.db.lock().unwrap();
+        let signer_id = signer_by_token(&db, &d.signer_token)?;
+        db.execute(
+            "INSERT OR REPLACE INTO approvals (request_id, signer_id, decision) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, signer_id, d.decision],
         )
         .map_err(internal)?;
+        log_event(&db, "request.decision", &format!("#{id} signer {signer_id}: {}", d.decision));
 
-    let mut status = "pending".to_string();
-    if d.decision == "reject" {
-        status = "rejected".into();
-    } else if approvals >= QUORUM {
-        status = "quorum".into();
-        log_event(&db, "request.quorum", &format!("#{id} reached {approvals}/{QUORUM} — ceremony pending"));
-        // TODO(Jul 6): trigger the signing ceremony pipeline (scripts/40..60)
-        // as a tokio task: pczt create → zcash-sign → frost-client rounds →
-        // prove/combine/send, streaming progress over SSE.
-    }
-    db.execute("UPDATE requests SET status = ?1 WHERE id = ?2 AND status = 'pending'",
-        rusqlite::params![status, id])
+        let approvals: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM approvals WHERE request_id = ?1 AND decision = 'approve'",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(internal)?;
+
+        let mut status = "pending".to_string();
+        if d.decision == "reject" {
+            status = "rejected".into();
+        } else if approvals >= QUORUM {
+            status = "quorum".into();
+            log_event(&db, "request.quorum", &format!("#{id} reached {approvals}/{QUORUM}"));
+        }
+        db.execute(
+            "UPDATE requests SET status = ?1 WHERE id = ?2 AND status = 'pending'",
+            rusqlite::params![status, id],
+        )
         .map_err(internal)?;
+        (approvals, status)
+    };
+
+    let _ = st.events.send(
+        json!({"request_id": id, "step": "decision", "detail": format!("{} ({approvals}/{QUORUM})", d.decision)})
+            .to_string(),
+    );
+
+    if status == "quorum" {
+        spawn_ceremony(st.clone(), id);
+    }
     Ok(Json(json!({ "id": id, "approvals": approvals, "status": status })))
 }
 
-async fn audit(State(db): State<Db>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = db.lock().unwrap();
+/// Fire the signing pipeline for a request that just reached quorum.
+fn spawn_ceremony(st: AppState, id: i64) {
+    let Some(cfg) = st.cfg.clone() else {
+        let db = st.db.lock().unwrap();
+        log_event(&db, "ceremony.skipped", &format!("#{id} quorum reached but server has no signing config"));
+        return;
+    };
+
+    tokio::spawn(async move {
+        // Gather request + the two approvers.
+        let (recipient, amount, reason, approver_ids) = {
+            let db = st.db.lock().unwrap();
+            let row = db
+                .query_row(
+                    "SELECT recipient, amount_zat, reason FROM requests WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+                )
+                .expect("request exists");
+            let mut stmt = db
+                .prepare("SELECT signer_id FROM approvals WHERE request_id = ?1 AND decision = 'approve' ORDER BY created_at LIMIT 2")
+                .unwrap();
+            let ids: Vec<i64> = stmt.query_map([id], |r| r.get(0)).unwrap().flatten().collect();
+            db.execute("UPDATE requests SET status = 'signing' WHERE id = ?1", [id]).ok();
+            (row.0, row.1, row.2, ids)
+        };
+        let approvers: Vec<_> = approver_ids
+            .iter()
+            .filter_map(|i| cfg.signer_by_id(*i).cloned())
+            .collect();
+
+        let db = st.db.clone();
+        let events = st.events.clone();
+        let progress = move |step: &str, detail: &str| {
+            let db = db.lock().unwrap();
+            log_event(&db, &format!("ceremony.{step}"), &format!("#{id} {detail}"));
+            let _ = events.send(json!({"request_id": id, "step": step, "detail": detail}).to_string());
+        };
+
+        let result = pipeline::run(&cfg, id, &recipient, amount, &reason, &approvers, &progress).await;
+
+        let db = st.db.lock().unwrap();
+        match result {
+            Ok(out) => {
+                db.execute(
+                    "UPDATE requests SET status = 'broadcast', txid = ?1 WHERE id = ?2",
+                    rusqlite::params![out.txid, id],
+                )
+                .ok();
+                log_event(&db, "ceremony.broadcast", &format!("#{id} txid {}", out.txid));
+                let _ = st.events.send(json!({"request_id": id, "step": "broadcast", "detail": out.txid}).to_string());
+            }
+            Err(e) => {
+                db.execute("UPDATE requests SET status = 'failed' WHERE id = ?1", [id]).ok();
+                log_event(&db, "ceremony.failed", &format!("#{id} {e:#}"));
+                let _ = st.events.send(json!({"request_id": id, "step": "failed", "detail": e.to_string()}).to_string());
+            }
+        }
+    });
+}
+
+async fn sse_events(
+    State(st): State<AppState>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let rx = st.events.subscribe();
+    let stream = BroadcastStream::new(rx)
+        .filter_map(|msg| msg.ok())
+        .map(|msg| Ok(Event::default().data(msg)));
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+async fn audit(State(st): State<AppState>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let db = st.db.lock().unwrap();
     let mut stmt = db
         .prepare("SELECT event, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200")
         .map_err(internal)?;

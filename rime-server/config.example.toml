@@ -1,0 +1,28 @@
+network = "test"
+wallet_dir = "runtime/wallet-test"
+group = "1284fee393a0c3937bd2f1f500ed6cafaa35a594e76f7b9f23f18f1394c1482c"
+frostd_url = "localhost:2744"
+ca_cert = "runtime/tls/ca.crt"
+runtime_dir = "runtime"
+treasury_address = "utest1uu37xk2d8z4v0zu55qq0m94grzqrvc7mgm25ylwcvms6mpw5mvjrqzj34p7gwx450hxwz2ygy9a7whxnc0hpjxsdd567yyflxy86zrts"
+
+[[signers]]
+id = 1
+name = "Alice"
+pubkey = "4d1f2d153b27d74dc7fe95f9dc1ef374c40bfe0237759a8cbede58cf77781c08"
+frost_config = "runtime/alice.toml"
+token = "CHANGE-ME"
+
+[[signers]]
+id = 2
+name = "Bob"
+pubkey = "e7e4c642da02d81af48768090a7a12ac8bbe5e50b61fff4e9529f92925e50e51"
+frost_config = "runtime/bob.toml"
+token = "CHANGE-ME"
+
+[[signers]]
+id = 3
+name = "Carol"
+pubkey = "503820bbd6a268d0f38faff94282b7836dac78e0ab566e428f80744c25b7f54f"
+frost_config = "runtime/carol.toml"
+token = "CHANGE-ME"
