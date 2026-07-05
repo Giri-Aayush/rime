@@ -11,9 +11,11 @@ mod pipeline;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
+use std::collections::HashMap;
+
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::sse::{Event, Sse},
     routing::{get, post},
     Json, Router,
@@ -115,28 +117,37 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Seed signers from config when present; dev placeholders otherwise.
+/// Sync signers from config on every boot (upsert by id) so token rotation
+/// and renames in rime-server.toml take effect — a stale token in the DB
+/// must never outlive the config that revoked it. Signer `status`
+/// (active/lost/repaired) is runtime state and is preserved.
 fn seed_signers(conn: &Connection, cfg: Option<&RimeConfig>) -> anyhow::Result<()> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM signers", [], |r| r.get(0))?;
-    if n > 0 {
-        return Ok(());
-    }
     match cfg {
         Some(c) => {
             for s in &c.signers {
                 conn.execute(
-                    "INSERT INTO signers (id, name, token) VALUES (?1, ?2, ?3)",
+                    "INSERT INTO signers (id, name, token) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(id) DO UPDATE SET name = excluded.name, token = excluded.token",
                     rusqlite::params![s.id, s.name, s.token],
                 )?;
             }
+            // Remove signers that no longer exist in config.
+            let ids: Vec<String> = c.signers.iter().map(|s| s.id.to_string()).collect();
+            conn.execute(
+                &format!("DELETE FROM signers WHERE id NOT IN ({})", ids.join(",")),
+                [],
+            )?;
         }
         None => {
-            conn.execute_batch(
-                "INSERT INTO signers (id, name, token) VALUES
-                    (1, 'Alice', 'dev-token-alice'),
-                    (2, 'Bob',   'dev-token-bob'),
-                    (3, 'Carol', 'dev-token-carol');",
-            )?;
+            let n: i64 = conn.query_row("SELECT COUNT(*) FROM signers", [], |r| r.get(0))?;
+            if n == 0 {
+                conn.execute_batch(
+                    "INSERT INTO signers (id, name, token) VALUES
+                        (1, 'Alice', 'dev-token-alice'),
+                        (2, 'Bob',   'dev-token-bob'),
+                        (3, 'Carol', 'dev-token-carol');",
+                )?;
+            }
         }
     }
     Ok(())
@@ -146,8 +157,12 @@ async fn health() -> Json<serde_json::Value> {
     Json(json!({ "ok": true, "service": "rime-server" }))
 }
 
-async fn treasury(State(st): State<AppState>) -> Json<serde_json::Value> {
-    match &st.cfg {
+async fn treasury(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_signer(&st.db.lock().unwrap(), &headers, None)?;
+    Ok(match &st.cfg {
         Some(c) => Json(json!({
             "network": c.network,
             "address": c.treasury_address,
@@ -155,7 +170,7 @@ async fn treasury(State(st): State<AppState>) -> Json<serde_json::Value> {
             "signers": c.signers.iter().map(|s| &s.name).collect::<Vec<_>>(),
         })),
         None => Json(json!({ "configured": false })),
-    }
+    })
 }
 
 async fn create_request(
@@ -177,8 +192,10 @@ async fn create_request(
 
 async fn list_requests(
     State(st): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<PaymentRequest>>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
+    require_signer(&db, &headers, None)?;
     let mut stmt = db
         .prepare(
             "SELECT r.id, r.recipient, r.amount_zat, r.reason, r.status, r.txid, r.created_at,
@@ -213,7 +230,11 @@ async fn decide(
     if d.decision != "approve" && d.decision != "reject" {
         return Err((StatusCode::BAD_REQUEST, "decision must be approve|reject".into()));
     }
-    let (approvals, status) = {
+    // All decision handling happens under one DB lock, and the ceremony fires
+    // only if THIS call performed the pending→quorum transition (rows == 1).
+    // A concurrent approval or a late third approval sees rows == 0 and never
+    // double-fires the ceremony.
+    let (approvals, status, fire) = {
         let db = st.db.lock().unwrap();
         let signer_id = signer_by_token(&db, &d.signer_token)?;
         db.execute(
@@ -231,19 +252,29 @@ async fn decide(
             )
             .map_err(internal)?;
 
-        let mut status = "pending".to_string();
+        let mut fire = false;
         if d.decision == "reject" {
-            status = "rejected".into();
+            db.execute(
+                "UPDATE requests SET status = 'rejected' WHERE id = ?1 AND status = 'pending'",
+                [id],
+            )
+            .map_err(internal)?;
         } else if approvals >= QUORUM {
-            status = "quorum".into();
-            log_event(&db, "request.quorum", &format!("#{id} reached {approvals}/{QUORUM}"));
+            let transitioned = db
+                .execute(
+                    "UPDATE requests SET status = 'quorum' WHERE id = ?1 AND status = 'pending'",
+                    [id],
+                )
+                .map_err(internal)?;
+            if transitioned == 1 {
+                fire = true;
+                log_event(&db, "request.quorum", &format!("#{id} reached {approvals}/{QUORUM}"));
+            }
         }
-        db.execute(
-            "UPDATE requests SET status = ?1 WHERE id = ?2 AND status = 'pending'",
-            rusqlite::params![status, id],
-        )
-        .map_err(internal)?;
-        (approvals, status)
+        let status: String = db
+            .query_row("SELECT status FROM requests WHERE id = ?1", [id], |r| r.get(0))
+            .map_err(|_| (StatusCode::NOT_FOUND, "unknown request".into()))?;
+        (approvals, status, fire)
     };
 
     let _ = st.events.send(
@@ -251,7 +282,7 @@ async fn decide(
             .to_string(),
     );
 
-    if status == "quorum" {
+    if fire {
         spawn_ceremony(st.clone(), id);
     }
     Ok(Json(json!({ "id": id, "approvals": approvals, "status": status })))
@@ -320,16 +351,24 @@ fn spawn_ceremony(st: AppState, id: i64) {
 
 async fn sse_events(
     State(st): State<AppState>,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+    // EventSource can't set headers, so SSE also accepts ?token=.
+    require_signer(&st.db.lock().unwrap(), &headers, q.get("token").map(|s| s.as_str()))?;
     let rx = st.events.subscribe();
     let stream = BroadcastStream::new(rx)
         .filter_map(|msg| msg.ok())
         .map(|msg| Ok(Event::default().data(msg)));
-    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
-async fn audit(State(st): State<AppState>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+async fn audit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
+    require_signer(&db, &headers, None)?;
     let mut stmt = db
         .prepare("SELECT event, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200")
         .map_err(internal)?;
@@ -341,6 +380,23 @@ async fn audit(State(st): State<AppState>) -> Result<Json<serde_json::Value>, (S
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
     Ok(Json(json!(rows)))
+}
+
+/// Authenticate any known signer for read access, via `Authorization:
+/// Bearer <token>` or (for EventSource, which cannot set headers) `?token=`.
+fn require_signer(
+    db: &Connection,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<i64, (StatusCode, String)> {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let token = bearer
+        .or(query_token)
+        .ok_or((StatusCode::UNAUTHORIZED, "missing signer token".to_string()))?;
+    signer_by_token(db, token)
 }
 
 fn signer_by_token(db: &Connection, token: &str) -> Result<i64, (StatusCode, String)> {
