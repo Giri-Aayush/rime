@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rime — frost-sealed treasury</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">🧊</span>
+    <div class="brand-text">
+      <h1 class="brand-name">Rime</h1>
+      <p class="brand-tag">frost&#8209;sealed treasury for teams</p>
+    </div>
+  </div>
+  <div class="topbar-meta">
+    <span class="badge" id="badge-network">network&nbsp;—</span>
+    <span class="badge badge-ice" id="badge-threshold">2&#8209;of&#8209;3 · FROST</span>
+    <span class="conn conn--connecting" id="conn">
+      <span class="conn-dot" aria-hidden="true"></span>
+      <span id="conn-label">connecting</span>
+    </span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ══════════ Treasury column ══════════ -->
+  <section class="col-treasury" aria-label="Treasury">
+
+    <div class="card card-balance">
+      <div class="card-label">Treasury balance</div>
+      <div class="balance-row">
+        <span class="balance-amt" id="balance-amt">—</span>
+        <span class="balance-unit" id="balance-unit">TAZ</span>
+      </div>
+      <p class="balance-note">No single person can move these funds — any
+        <strong id="threshold-inline">2 of 3</strong> signers must approve.</p>
+    </div>
+
+    <div class="card card-address">
+      <div class="card-label">Deposit address · Orchard</div>
+      <div class="addr-row">
+        <code class="addr mono" id="addr" title="">—</code>
+        <button class="btn btn-ghost btn-copy" id="copy-addr" type="button">Copy</button>
+      </div>
+      <p class="guard-note">
+        <span class="guard-dot" aria-hidden="true"></span>
+        Orchard receiver only — Sapling deposits would be unspendable.
+      </p>
+    </div>
+
+    <div class="card card-form">
+      <div class="card-label">New request</div>
+      <form id="req-form" autocomplete="off">
+        <label class="field">
+          <span class="field-label">Recipient</span>
+          <input class="input mono" id="f-recipient" name="recipient" spellcheck="false"
+                 placeholder="u1…" required>
+          <span class="field-hint" id="f-recipient-hint">defaults to the treasury’s own address — self&#8209;pay demo</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Amount <span class="field-unit" id="f-unit">TAZ</span></span>
+          <input class="input mono" id="f-amount" name="amount" inputmode="decimal"
+                 placeholder="0.10000000" required>
+          <span class="field-hint mono" id="f-zat-hint">&nbsp;</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Reason</span>
+          <input class="input" id="f-reason" name="reason" maxlength="120"
+                 placeholder="Why is the treasury paying this?" required>
+        </label>
+        <div class="form-foot">
+          <span class="form-error" id="f-error"></span>
+          <button class="btn btn-primary" type="submit" id="f-submit">Create request</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card card-feed">
+      <div class="card-label">Payment requests</div>
+      <div class="feed" id="feed">
+        <p class="empty">No requests yet — create one above.</p>
+      </div>
+    </div>
+
+    <details class="card card-audit" id="audit-wrap">
+      <summary class="card-label audit-summary">
+        Audit log <span class="audit-count" id="audit-count">0</span>
+        <span class="audit-chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="audit" id="audit"></div>
+    </details>
+
+  </section>
+
+  <!-- ══════════ Signer phones ══════════ -->
+  <section class="col-signers" aria-label="Signers">
+    <div class="signers-head">
+      <span class="card-label">Signers</span>
+      <span class="signers-note">three people hold key shares — any two approvals move funds</span>
+    </div>
+    <div class="phones" id="phones"></div>
+  </section>
+
+</main>
+
+<!-- ══════════ Ceremony strip ══════════ -->
+<footer class="ceremony-strip" id="strip" aria-label="Ceremony progress"></footer>
+
+<!-- ══════════ Device mode (?signer=alice|bob|carol) — the physical phone IS the bezel ══════════ -->
+<div id="signer-app" class="signer-app" aria-label="Signer device view"></div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

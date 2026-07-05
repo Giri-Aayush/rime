@@ -109,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sse-ticket", post(sse_ticket))
         .route("/api/events", get(sse_events))
         .route("/api/audit", get(audit))
+        .fallback_service(tower_http::services::ServeDir::new("web"))
         .with_state(state);
 
     // Default stays loopback; set RIME_BIND=0.0.0.0:8787 for the multi-device
