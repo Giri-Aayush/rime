@@ -113,7 +113,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/signers", get(signers))
         .route("/api/signers/{id}/mark-lost", post(mark_lost))
         .route("/api/signers/{id}/repair", post(repair_signer))
-        .fallback_service(tower_http::services::ServeDir::new("web"))
+        // Serve the built Next.js export when present, else the vanilla
+        // fallback UI. Override with RIME_WEB_DIR.
+        .fallback_service(tower_http::services::ServeDir::new(
+            std::env::var("RIME_WEB_DIR").unwrap_or_else(|_| {
+                if std::path::Path::new("frontend/out/index.html").exists() {
+                    "frontend/out".into()
+                } else {
+                    "web".into()
+                }
+            }),
+        ))
         .with_state(state);
 
     // Default stays loopback; set RIME_BIND=0.0.0.0:8787 for the multi-device
