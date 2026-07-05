@@ -47,6 +47,21 @@ apology.
 - Signer tokens sync from config on boot, so rotating or removing a signer
   takes effect immediately.
 
+## Operational footguns (guarded)
+
+- **Orchard-only account.** Funds sent to a Sapling receiver of the treasury's
+  unified address are unspendable. The UI and scripts only ever emit the
+  Orchard receiver.
+- **`zcash-sign generate` is non-deterministic.** Each run derives a brand-new
+  account (new UFVK + address) from the same FROST `ak`, because the nk/rivk
+  viewing components are freshly randomized. Deriving twice and using the
+  second address would orphan any funds under the first. The treasury identity
+  must be derived **once** and kept; `scripts/20_address.sh` refuses to
+  overwrite an existing keys file (pass `--force` only to deliberately abandon
+  the identity), and `bringup.sh` skips derivation when the keys file exists.
+  The miner address, the watch-only wallet, and `rime-server.toml` must all
+  reference that one identity.
+
 ## Cryptography
 
 Rime writes no cryptography of its own. It uses the audited ZF stack as-is:
