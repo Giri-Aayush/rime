@@ -65,7 +65,7 @@ export function DeviceView({ rime }: { rime: RimeState }) {
   return (
     <div
       className={cn(
-        "relative mx-auto flex min-h-dvh w-full max-w-[620px] flex-col",
+        "relative mx-auto flex min-h-dvh w-full max-w-[620px] flex-col overflow-x-hidden",
         "px-[max(18px,env(safe-area-inset-left))] pb-[max(8px,env(safe-area-inset-bottom))] pt-[max(12px,env(safe-area-inset-top))]",
       )}
     >
