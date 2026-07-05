@@ -48,7 +48,7 @@ export function ApprovalCard({
   return (
     <div
       className={cn(
-        "rime-rise rounded-2xl border bg-card/85 p-3.5",
+        "rime-rise w-full min-w-0 overflow-hidden rounded-2xl border bg-card/85 p-3.5",
         large && "rounded-[20px] p-4",
         kind === "open"
           ? "border-primary/30 shadow-[0_0_28px_-16px_var(--primary)]"
@@ -97,7 +97,7 @@ export function ApprovalCard({
             type="button"
             onClick={onApprove}
             className={cn(
-              "group/ap flex flex-1 items-center justify-center gap-2 rounded-full border border-primary/35 bg-primary/15 font-semibold text-primary transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-primary/25 active:scale-[0.97]",
+              "group/ap flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-primary/35 bg-primary/15 font-semibold text-primary transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-primary/25 active:scale-[0.97]",
               large ? "min-h-[54px] text-base" : "min-h-9 text-[13px]",
             )}
           >
@@ -110,7 +110,7 @@ export function ApprovalCard({
             type="button"
             onClick={onReject}
             className={cn(
-              "group/rj flex flex-1 items-center justify-center gap-2 rounded-full border border-border bg-transparent font-semibold text-muted-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:border-destructive/40 hover:text-destructive active:scale-[0.97]",
+              "group/rj flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-border bg-transparent font-semibold text-muted-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:border-destructive/40 hover:text-destructive active:scale-[0.97]",
               large ? "min-h-[54px] text-base" : "min-h-9 text-[13px]",
             )}
           >
