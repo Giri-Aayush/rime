@@ -6,6 +6,7 @@
 //! see pipeline.rs. The server never touches key shares.
 
 mod config;
+mod notify;
 mod pipeline;
 mod recovery;
 
@@ -40,6 +41,7 @@ struct AppState {
     db: Db,
     cfg: Option<Arc<RimeConfig>>,
     events: broadcast::Sender<String>,
+    discord: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,10 +98,15 @@ async fn main() -> anyhow::Result<()> {
     seed_signers(&conn, cfg.as_deref())?;
 
     let (events, _) = broadcast::channel(256);
+    let discord = notify::resolve(&cfg.as_ref().and_then(|c| c.discord_webhook.clone()));
+    if discord.is_some() {
+        tracing::info!("discord notifications enabled");
+    }
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         cfg,
         events,
+        discord,
     };
 
     let app = Router::new()
@@ -301,6 +308,15 @@ async fn decide(
     );
 
     if fire {
+        let reason: String = {
+            let db = st.db.lock().unwrap();
+            db.query_row("SELECT reason FROM requests WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap_or_default()
+        };
+        notify::ping(
+            st.discord.clone(),
+            format!("✅ Payment #{id} reached {QUORUM}-of-3 approval — \"{reason}\". Signing now."),
+        );
         spawn_ceremony(st.clone(), id);
     }
     Ok(Json(json!({ "id": id, "approvals": approvals, "status": status })))
@@ -357,6 +373,10 @@ fn spawn_ceremony(st: AppState, id: i64) {
                 .ok();
                 log_event(&db, "ceremony.broadcast", &format!("#{id} txid {}", out.txid));
                 let _ = st.events.send(json!({"request_id": id, "step": "broadcast", "detail": out.txid}).to_string());
+                notify::ping(
+                    st.discord.clone(),
+                    format!("🧊 Payment #{id} broadcast to Zcash. txid `{}`", out.txid),
+                );
             }
             Err(e) => {
                 db.execute("UPDATE requests SET status = 'failed' WHERE id = ?1", [id]).ok();
@@ -562,6 +582,10 @@ async fn repair_signer(
             db.execute("UPDATE signers SET status = 'active' WHERE id = ?1", [id]).ok();
         }
         emit("recovery.done", &format!("{name} restored on a new device; treasury address unchanged"));
+        notify::ping(
+            st2.discord.clone(),
+            format!("🛟 {name}'s signer was recovered from the other signers. Treasury address unchanged; the old share is now dead."),
+        );
     });
 
     Ok(Json(json!({ "id": id, "status": "repairing" })))

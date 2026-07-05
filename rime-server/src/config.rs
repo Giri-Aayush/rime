@@ -34,6 +34,10 @@ pub struct RimeConfig {
     pub runtime_dir: String,
     /// The treasury's Orchard-only unified address
     pub treasury_address: String,
+    /// Optional Discord webhook: approvals/broadcasts/recoveries ping the
+    /// team's own channel. Overridden by RIME_DISCORD_WEBHOOK.
+    #[serde(default)]
+    pub discord_webhook: Option<String>,
     pub signers: Vec<SignerCfg>,
 }
 
