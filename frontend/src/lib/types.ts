@@ -59,6 +59,3 @@ export const SIGNER_TOKENS: Record<string, string> = {
   bob: "dev-token-bob",
   carol: "dev-token-carol",
 };
-
-// zatoshis per ZEC/TAZ
-export const COIN = 100_000_000;

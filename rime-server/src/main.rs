@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "rime_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "rime_server=info".into()),
         )
         .init();
 
@@ -196,7 +196,7 @@ async fn treasury(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_signer(&st.db.lock().unwrap(), &headers, None)?;
+    require_signer(&st.db.lock().unwrap(), &headers)?;
     Ok(match &st.cfg {
         Some(c) => Json(json!({
             "network": c.network,
@@ -212,7 +212,7 @@ async fn balance_handler(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_signer(&st.db.lock().unwrap(), &headers, None)?;
+    require_signer(&st.db.lock().unwrap(), &headers)?;
     let Some(cfg) = &st.cfg else {
         return Err((StatusCode::PRECONDITION_FAILED, "no wallet configured".into()));
     };
@@ -248,7 +248,7 @@ async fn list_requests(
     headers: HeaderMap,
 ) -> Result<Json<Vec<PaymentRequest>>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
-    require_signer(&db, &headers, None)?;
+    require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare(
             "SELECT r.id, r.recipient, r.amount_zat, r.reason, r.status, r.txid, r.created_at,
@@ -423,7 +423,7 @@ async fn sse_ticket(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
-    let signer_id = require_signer(&db, &headers, None)?;
+    let signer_id = require_signer(&db, &headers)?;
     db.execute("DELETE FROM sse_tickets WHERE expires_at <= datetime('now')", [])
         .map_err(internal)?;
     let ticket: String = db
@@ -445,7 +445,7 @@ async fn sse_events(
     {
         let db = st.db.lock().unwrap();
         // Bearer header for CLI clients; one-time ?ticket= for EventSource.
-        if require_signer(&db, &headers, None).is_err() {
+        if require_signer(&db, &headers).is_err() {
             let ticket = q
                 .get("ticket")
                 .ok_or((StatusCode::UNAUTHORIZED, "missing ticket".to_string()))?;
@@ -472,7 +472,7 @@ async fn audit(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
-    require_signer(&db, &headers, None)?;
+    require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare("SELECT event, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200")
         .map_err(internal)?;
@@ -496,7 +496,7 @@ async fn signers(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let db = st.db.lock().unwrap();
-    require_signer(&db, &headers, None)?;
+    require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare("SELECT id, name, status FROM signers ORDER BY id")
         .map_err(internal)?;
@@ -619,19 +619,14 @@ async fn repair_signer(
     Ok(Json(json!({ "id": id, "status": "repairing" })))
 }
 
-/// Authenticate any known signer for read access, via `Authorization:
-/// Bearer <token>` or (for EventSource, which cannot set headers) `?token=`.
-fn require_signer(
-    db: &Connection,
-    headers: &HeaderMap,
-    query_token: Option<&str>,
-) -> Result<i64, (StatusCode, String)> {
-    let bearer = headers
+/// Authenticate any known signer via `Authorization: Bearer <token>`.
+/// EventSource cannot set headers, so it authenticates through the single-use
+/// ticket flow instead (see `sse_ticket` / `sse_events`).
+fn require_signer(db: &Connection, headers: &HeaderMap) -> Result<i64, (StatusCode, String)> {
+    let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    let token = bearer
-        .or(query_token)
+        .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or((StatusCode::UNAUTHORIZED, "missing signer token".to_string()))?;
     signer_by_token(db, token)
 }

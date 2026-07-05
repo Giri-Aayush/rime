@@ -18,3 +18,7 @@ pczt.*
 .idea/
 .vscode/
 *.log
+
+# design-skill tooling (local dev aids, not product)
+.agents/
+skills-lock.json

@@ -18,8 +18,6 @@ export const SIGNERS: SignerConfig[] = [
   { id: 3, name: "Carol", token: SIGNER_TOKENS.carol, hue: "c" },
 ];
 
-export const POLL_MS = 4000;
-
 /** ?signer=alice|bob|carol → signer index (else null = desktop dashboard). */
 export const SIGNER_SLUGS: Record<string, number> = { alice: 0, bob: 1, carol: 2 };
 
@@ -91,15 +89,6 @@ export const RECOVERY_SHORT: Record<string, string> = {
 };
 
 export const stepLabel = (s: string): string => STEP_LABELS[s] ?? s;
-
-export const REQUEST_STATUSES = [
-  "pending",
-  "quorum",
-  "signing",
-  "broadcast",
-  "failed",
-  "rejected",
-] as const;
 
 /* ─── network helpers ─────────────────────────────────────────────── */
 

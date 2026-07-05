@@ -220,8 +220,8 @@ fn read_key_package(path: &Path, group: &str) -> Result<KeyPackage<C>> {
         .get("key_package")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("no key_package in {}", path.display()))?;
-    Ok(KeyPackage::deserialize(&hex::decode(hex_str)?)
-        .map_err(|e| anyhow!("bad key_package in {}: {e}", path.display()))?)
+    KeyPackage::deserialize(&hex::decode(hex_str)?)
+        .map_err(|e| anyhow!("bad key_package in {}: {e}", path.display()))
 }
 
 fn read_public_key_package(path: &Path, group: &str) -> Result<PublicKeyPackage<C>> {
@@ -230,8 +230,8 @@ fn read_public_key_package(path: &Path, group: &str) -> Result<PublicKeyPackage<
         .get("public_key_package")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("no public_key_package in {}", path.display()))?;
-    Ok(PublicKeyPackage::deserialize(&hex::decode(hex_str)?)
-        .map_err(|e| anyhow!("bad public_key_package in {}: {e}", path.display()))?)
+    PublicKeyPackage::deserialize(&hex::decode(hex_str)?)
+        .map_err(|e| anyhow!("bad public_key_package in {}: {e}", path.display()))
 }
 
 fn write_group_field(path: &Path, group: &str, field: &str, value: String) -> Result<()> {

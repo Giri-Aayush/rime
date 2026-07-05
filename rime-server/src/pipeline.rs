@@ -1,6 +1,8 @@
 //! The signing ceremony pipeline: what happens after the second approval.
 //!
 //! Orchestrates the exact flow proven by hand on Jul 5 (see scripts/40..60):
+//!
+//! ```text
 //!   1. zcash-devtool pczt create            → unsigned PCZT (reason in memo)
 //!   2. zcash-sign sign                      → prints SIGHASH + randomizer,
 //!                                             then waits on stdin for the
@@ -9,6 +11,7 @@
 //!                                           → aggregate RedPallas signature
 //!   4. signature → zcash-sign stdin         → signed PCZT
 //!   5. zcash-devtool pczt prove / combine / send → txid on-chain
+//! ```
 //!
 //! Every step emits an SSE event and an audit row. The server never touches
 //! key shares: participants run against per-signer frost-client configs.
