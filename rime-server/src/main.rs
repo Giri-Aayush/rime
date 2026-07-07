@@ -11,8 +11,9 @@ mod notify;
 mod pipeline;
 mod recovery;
 
+use parking_lot::Mutex;
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use std::collections::HashMap;
 
@@ -85,8 +86,8 @@ async fn main() -> anyhow::Result<()> {
     let conn = Connection::open("runtime/rime.db")?;
     conn.execute_batch(include_str!("schema.sql"))?;
 
-    let cfg_path = std::env::var("RIME_SERVER_CONFIG")
-        .unwrap_or_else(|_| "runtime/rime-server.toml".into());
+    let cfg_path =
+        std::env::var("RIME_SERVER_CONFIG").unwrap_or_else(|_| "runtime/rime-server.toml".into());
     let cfg = match RimeConfig::load(&cfg_path) {
         Ok(c) => {
             tracing::info!(path = %cfg_path, network = %c.network, "signing config loaded");
@@ -166,11 +167,13 @@ fn seed_signers(conn: &Connection, cfg: Option<&RimeConfig>) -> anyhow::Result<(
                     rusqlite::params![s.id, s.name, s.token],
                 )?;
             }
-            // Remove signers that no longer exist in config.
-            let ids: Vec<String> = c.signers.iter().map(|s| s.id.to_string()).collect();
+            // Remove signers that no longer exist in config (bound params,
+            // not string interpolation — safe by construction, not by luck).
+            let placeholders = vec!["?"; c.signers.len()].join(",");
+            let ids: Vec<i64> = c.signers.iter().map(|s| s.id).collect();
             conn.execute(
-                &format!("DELETE FROM signers WHERE id NOT IN ({})", ids.join(",")),
-                [],
+                &format!("DELETE FROM signers WHERE id NOT IN ({placeholders})"),
+                rusqlite::params_from_iter(ids.iter()),
             )?;
         }
         None => {
@@ -196,7 +199,7 @@ async fn treasury(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_signer(&st.db.lock().unwrap(), &headers)?;
+    require_signer(&st.db.lock(), &headers)?;
     Ok(match &st.cfg {
         Some(c) => Json(json!({
             "network": c.network,
@@ -212,9 +215,12 @@ async fn balance_handler(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_signer(&st.db.lock().unwrap(), &headers)?;
+    require_signer(&st.db.lock(), &headers)?;
     let Some(cfg) = &st.cfg else {
-        return Err((StatusCode::PRECONDITION_FAILED, "no wallet configured".into()));
+        return Err((
+            StatusCode::PRECONDITION_FAILED,
+            "no wallet configured".into(),
+        ));
     };
     match st.balance.get(&cfg.wallet_dir).await {
         Ok(b) => Ok(Json(json!({
@@ -230,7 +236,7 @@ async fn create_request(
     State(st): State<AppState>,
     Json(req): Json<NewRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = st.db.lock().unwrap();
+    let db = st.db.lock();
     let signer_id = signer_by_token(&db, &req.signer_token)?;
     db.execute(
         "INSERT INTO requests (recipient, amount_zat, reason, created_by) VALUES (?1, ?2, ?3, ?4)",
@@ -238,8 +244,14 @@ async fn create_request(
     )
     .map_err(internal)?;
     let id = db.last_insert_rowid();
-    log_event(&db, "request.created", &format!("#{id} {} zat: {}", req.amount_zat, req.reason));
-    let _ = st.events.send(json!({"request_id": id, "step": "created", "detail": req.reason}).to_string());
+    log_event(
+        &db,
+        "request.created",
+        &format!("#{id} {} zat: {}", req.amount_zat, req.reason),
+    );
+    let _ = st
+        .events
+        .send(json!({"request_id": id, "step": "created", "detail": req.reason}).to_string());
     Ok(Json(json!({ "id": id, "status": "pending" })))
 }
 
@@ -247,7 +259,7 @@ async fn list_requests(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<PaymentRequest>>, (StatusCode, String)> {
-    let db = st.db.lock().unwrap();
+    let db = st.db.lock();
     require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare(
@@ -281,21 +293,28 @@ async fn decide(
     Json(d): Json<Decision>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     if d.decision != "approve" && d.decision != "reject" {
-        return Err((StatusCode::BAD_REQUEST, "decision must be approve|reject".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "decision must be approve|reject".into(),
+        ));
     }
     // All decision handling happens under one DB lock, and the ceremony fires
     // only if THIS call performed the pending→quorum transition (rows == 1).
     // A concurrent approval or a late third approval sees rows == 0 and never
     // double-fires the ceremony.
     let (approvals, status, fire) = {
-        let db = st.db.lock().unwrap();
+        let db = st.db.lock();
         let signer_id = signer_by_token(&db, &d.signer_token)?;
         db.execute(
             "INSERT OR REPLACE INTO approvals (request_id, signer_id, decision) VALUES (?1, ?2, ?3)",
             rusqlite::params![id, signer_id, d.decision],
         )
         .map_err(internal)?;
-        log_event(&db, "request.decision", &format!("#{id} signer {signer_id}: {}", d.decision));
+        log_event(
+            &db,
+            "request.decision",
+            &format!("#{id} signer {signer_id}: {}", d.decision),
+        );
 
         let approvals: i64 = db
             .query_row(
@@ -321,11 +340,17 @@ async fn decide(
                 .map_err(internal)?;
             if transitioned == 1 {
                 fire = true;
-                log_event(&db, "request.quorum", &format!("#{id} reached {approvals}/{QUORUM}"));
+                log_event(
+                    &db,
+                    "request.quorum",
+                    &format!("#{id} reached {approvals}/{QUORUM}"),
+                );
             }
         }
         let status: String = db
-            .query_row("SELECT status FROM requests WHERE id = ?1", [id], |r| r.get(0))
+            .query_row("SELECT status FROM requests WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
             .map_err(|_| (StatusCode::NOT_FOUND, "unknown request".into()))?;
         (approvals, status, fire)
     };
@@ -337,9 +362,11 @@ async fn decide(
 
     if fire {
         let reason: String = {
-            let db = st.db.lock().unwrap();
-            db.query_row("SELECT reason FROM requests WHERE id = ?1", [id], |r| r.get(0))
-                .unwrap_or_default()
+            let db = st.db.lock();
+            db.query_row("SELECT reason FROM requests WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap_or_default()
         };
         notify::ping(
             st.discord.clone(),
@@ -347,51 +374,69 @@ async fn decide(
         );
         spawn_ceremony(st.clone(), id);
     }
-    Ok(Json(json!({ "id": id, "approvals": approvals, "status": status })))
+    Ok(Json(
+        json!({ "id": id, "approvals": approvals, "status": status }),
+    ))
 }
 
 /// Fire the signing pipeline for a request that just reached quorum.
 fn spawn_ceremony(st: AppState, id: i64) {
     let Some(cfg) = st.cfg.clone() else {
-        let db = st.db.lock().unwrap();
-        log_event(&db, "ceremony.skipped", &format!("#{id} quorum reached but server has no signing config"));
+        let db = st.db.lock();
+        log_event(
+            &db,
+            "ceremony.skipped",
+            &format!("#{id} quorum reached but server has no signing config"),
+        );
         return;
     };
 
     tokio::spawn(async move {
-        // Gather request + the two approvers.
-        let (recipient, amount, reason, approver_ids) = {
-            let db = st.db.lock().unwrap();
-            let row = db
-                .query_row(
-                    "SELECT recipient, amount_zat, reason FROM requests WHERE id = ?1",
-                    [id],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
-                )
-                .expect("request exists");
-            let mut stmt = db
-                .prepare("SELECT signer_id FROM approvals WHERE request_id = ?1 AND decision = 'approve' ORDER BY created_at LIMIT 2")
-                .unwrap();
-            let ids: Vec<i64> = stmt.query_map([id], |r| r.get(0)).unwrap().flatten().collect();
-            db.execute("UPDATE requests SET status = 'signing' WHERE id = ?1", [id]).ok();
-            (row.0, row.1, row.2, ids)
-        };
-        let approvers: Vec<_> = approver_ids
-            .iter()
-            .filter_map(|i| cfg.signer_by_id(*i).cloned())
-            .collect();
-
-        let db = st.db.clone();
         let events = st.events.clone();
+        let db_for_progress = st.db.clone();
         let progress = move |step: &str, detail: &str| {
-            let db = db.lock().unwrap();
+            let db = db_for_progress.lock();
             log_event(&db, &format!("ceremony.{step}"), &format!("#{id} {detail}"));
-            let _ = events.send(json!({"request_id": id, "step": step, "detail": detail}).to_string());
+            let _ =
+                events.send(json!({"request_id": id, "step": step, "detail": detail}).to_string());
         };
 
-        let result = pipeline::run(&cfg, id, &recipient, amount, &reason, &approvers, &progress).await;
+        // Gather request + the two approvers, fallibly: a missing or malformed
+        // row must route the request to `failed` — never panic the task and
+        // strand it mid-ceremony.
+        let gathered = (|| -> anyhow::Result<(String, i64, String, Vec<i64>)> {
+            let db = st.db.lock();
+            let row = db.query_row(
+                "SELECT recipient, amount_zat, reason FROM requests WHERE id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
+            )?;
+            let mut stmt = db.prepare(
+                "SELECT signer_id FROM approvals WHERE request_id = ?1 AND decision = 'approve' ORDER BY created_at LIMIT 2",
+            )?;
+            let ids: Vec<i64> = stmt.query_map([id], |r| r.get(0))?.flatten().collect();
+            db.execute("UPDATE requests SET status = 'signing' WHERE id = ?1", [id])?;
+            Ok((row.0, row.1, row.2, ids))
+        })();
 
-        let db = st.db.lock().unwrap();
+        let result = match gathered {
+            Ok((recipient, amount, reason, approver_ids)) => {
+                let approvers: Vec<_> = approver_ids
+                    .iter()
+                    .filter_map(|i| cfg.signer_by_id(*i).cloned())
+                    .collect();
+                pipeline::run(&cfg, id, &recipient, amount, &reason, &approvers, &progress).await
+            }
+            Err(e) => Err(e),
+        };
+
+        let db = st.db.lock();
         match result {
             Ok(out) => {
                 db.execute(
@@ -399,17 +444,27 @@ fn spawn_ceremony(st: AppState, id: i64) {
                     rusqlite::params![out.txid, id],
                 )
                 .ok();
-                log_event(&db, "ceremony.broadcast", &format!("#{id} txid {}", out.txid));
-                let _ = st.events.send(json!({"request_id": id, "step": "broadcast", "detail": out.txid}).to_string());
+                log_event(
+                    &db,
+                    "ceremony.broadcast",
+                    &format!("#{id} txid {}", out.txid),
+                );
+                let _ = st.events.send(
+                    json!({"request_id": id, "step": "broadcast", "detail": out.txid}).to_string(),
+                );
                 notify::ping(
                     st.discord.clone(),
                     format!("🧊 Payment #{id} broadcast to Zcash. txid `{}`", out.txid),
                 );
             }
             Err(e) => {
-                db.execute("UPDATE requests SET status = 'failed' WHERE id = ?1", [id]).ok();
+                db.execute("UPDATE requests SET status = 'failed' WHERE id = ?1", [id])
+                    .ok();
                 log_event(&db, "ceremony.failed", &format!("#{id} {e:#}"));
-                let _ = st.events.send(json!({"request_id": id, "step": "failed", "detail": e.to_string()}).to_string());
+                let _ = st.events.send(
+                    json!({"request_id": id, "step": "failed", "detail": e.to_string()})
+                        .to_string(),
+                );
             }
         }
     });
@@ -422,10 +477,13 @@ async fn sse_ticket(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = st.db.lock().unwrap();
+    let db = st.db.lock();
     let signer_id = require_signer(&db, &headers)?;
-    db.execute("DELETE FROM sse_tickets WHERE expires_at <= datetime('now')", [])
-        .map_err(internal)?;
+    db.execute(
+        "DELETE FROM sse_tickets WHERE expires_at <= datetime('now')",
+        [],
+    )
+    .map_err(internal)?;
     let ticket: String = db
         .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))
         .map_err(internal)?;
@@ -441,9 +499,10 @@ async fn sse_events(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)>
+{
     {
-        let db = st.db.lock().unwrap();
+        let db = st.db.lock();
         // Bearer header for CLI clients; one-time ?ticket= for EventSource.
         if require_signer(&db, &headers).is_err() {
             let ticket = q
@@ -471,7 +530,7 @@ async fn audit(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = st.db.lock().unwrap();
+    let db = st.db.lock();
     require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare("SELECT event, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200")
@@ -495,7 +554,7 @@ async fn signers(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let db = st.db.lock().unwrap();
+    let db = st.db.lock();
     require_signer(&db, &headers)?;
     let mut stmt = db
         .prepare("SELECT id, name, status FROM signers ORDER BY id")
@@ -522,30 +581,48 @@ async fn mark_lost(
     Json(t): Json<TokenOnly>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = {
-        let db = st.db.lock().unwrap();
+        let db = st.db.lock();
         let actor = signer_by_token(&db, &t.signer_token)?;
         let actor_name: String = db
-            .query_row("SELECT name FROM signers WHERE id = ?1", [actor], |r| r.get(0))
+            .query_row("SELECT name FROM signers WHERE id = ?1", [actor], |r| {
+                r.get(0)
+            })
             .map_err(internal)?;
         let active: i64 = db
-            .query_row("SELECT COUNT(*) FROM signers WHERE status != 'lost'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM signers WHERE status != 'lost'",
+                [],
+                |r| r.get(0),
+            )
             .map_err(internal)?;
         if active - 1 < QUORUM {
             return Err((
                 StatusCode::CONFLICT,
-                format!("cannot mark another signer lost: fewer than {QUORUM} signers would remain"),
+                format!(
+                    "cannot mark another signer lost: fewer than {QUORUM} signers would remain"
+                ),
             ));
         }
         let changed = db
-            .execute("UPDATE signers SET status = 'lost' WHERE id = ?1 AND status != 'lost'", [id])
+            .execute(
+                "UPDATE signers SET status = 'lost' WHERE id = ?1 AND status != 'lost'",
+                [id],
+            )
             .map_err(internal)?;
         if changed != 1 {
-            return Err((StatusCode::CONFLICT, "signer is already lost or unknown".into()));
+            return Err((
+                StatusCode::CONFLICT,
+                "signer is already lost or unknown".into(),
+            ));
         }
         let name: String = db
             .query_row("SELECT name FROM signers WHERE id = ?1", [id], |r| r.get(0))
             .map_err(internal)?;
-        log_event(&db, "recovery.lost", &format!("{name}'s device reported lost by {actor_name}"));
+        log_event(
+            &db,
+            "recovery.lost",
+            &format!("{name}'s device reported lost by {actor_name}"),
+        );
         name
     };
     let _ = st
@@ -562,10 +639,13 @@ async fn repair_signer(
     Json(t): Json<TokenOnly>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let Some(cfg) = st.cfg.clone() else {
-        return Err((StatusCode::PRECONDITION_FAILED, "server has no signing config".into()));
+        return Err((
+            StatusCode::PRECONDITION_FAILED,
+            "server has no signing config".into(),
+        ));
     };
     let name = {
-        let db = st.db.lock().unwrap();
+        let db = st.db.lock();
         let actor = signer_by_token(&db, &t.signer_token)?;
         // Recovery must be initiated by a signer other than the lost one, so a
         // single stolen token for the lost device can't drive its own repair.
@@ -576,9 +656,11 @@ async fn repair_signer(
             ));
         }
         let (name, status): (String, String) = db
-            .query_row("SELECT name, status FROM signers WHERE id = ?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT name, status FROM signers WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .map_err(|_| (StatusCode::NOT_FOUND, "unknown signer".to_string()))?;
         if status != "lost" {
             return Err((StatusCode::CONFLICT, format!("{name} is not marked lost")));
@@ -589,27 +671,37 @@ async fn repair_signer(
     let st2 = st.clone();
     tokio::spawn(async move {
         let emit = |step: &str, detail: &str| {
-            let db = st2.db.lock().unwrap();
+            let db = st2.db.lock();
             log_event(&db, step, detail);
             let _ = st2
                 .events
                 .send(json!({"request_id": 0, "step": step, "detail": detail}).to_string());
         };
-        emit("recovery.repair", &format!("{name}: remaining signers are rebuilding the share"));
+        emit(
+            "recovery.repair",
+            &format!("{name}: remaining signers are rebuilding the share"),
+        );
         if let Err(e) = recovery::repair(&cfg, id).await {
             emit("recovery.failed", &format!("{name}: {e:#}"));
             return;
         }
-        emit("recovery.refresh", "rotating all shares — the lost share becomes a dead key");
+        emit(
+            "recovery.refresh",
+            "rotating all shares — the lost share becomes a dead key",
+        );
         if let Err(e) = recovery::refresh(&cfg).await {
             emit("recovery.failed", &format!("refresh: {e:#}"));
             return;
         }
         {
-            let db = st2.db.lock().unwrap();
-            db.execute("UPDATE signers SET status = 'active' WHERE id = ?1", [id]).ok();
+            let db = st2.db.lock();
+            db.execute("UPDATE signers SET status = 'active' WHERE id = ?1", [id])
+                .ok();
         }
-        emit("recovery.done", &format!("{name} restored on a new device; treasury address unchanged"));
+        emit(
+            "recovery.done",
+            &format!("{name} restored on a new device; treasury address unchanged"),
+        );
         notify::ping(
             st2.discord.clone(),
             format!("🛟 {name}'s signer was recovered from the other signers. Treasury address unchanged; the old share is now dead."),

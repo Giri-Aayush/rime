@@ -26,7 +26,10 @@ pub struct BalanceCache {
 
 impl BalanceCache {
     pub fn new() -> Self {
-        Self { inner: Mutex::new(None), ttl: Duration::from_secs(8) }
+        Self {
+            inner: Mutex::new(None),
+            ttl: Duration::from_secs(8),
+        }
     }
 
     /// Cached balance, refreshing at most once per `ttl`.
@@ -71,5 +74,6 @@ fn zats_after(text: &str, label: &str) -> Option<i64> {
 }
 
 fn line_after<'a>(text: &'a str, label: &str) -> Option<&'a str> {
-    text.lines().find_map(|l| l.split_once(label).map(|(_, rest)| rest.trim()))
+    text.lines()
+        .find_map(|l| l.split_once(label).map(|(_, rest)| rest.trim()))
 }

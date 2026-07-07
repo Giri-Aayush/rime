@@ -78,7 +78,10 @@ impl Client {
             .await
             .context("contacting rime-server")?;
         if !r.status().is_success() {
-            return Err(anyhow!("server returned {} — check the token/server", r.status()));
+            return Err(anyhow!(
+                "server returned {} — check the token/server",
+                r.status()
+            ));
         }
         Ok(r.json().await?)
     }
@@ -91,7 +94,11 @@ impl Client {
             .send()
             .await?;
         if !r.status().is_success() {
-            return Err(anyhow!("{}: {}", r.status(), r.text().await.unwrap_or_default()));
+            return Err(anyhow!(
+                "{}: {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ));
         }
         Ok(())
     }
@@ -99,7 +106,8 @@ impl Client {
 
 /// Payments still open for a decision.
 fn awaiting(reqs: &[PaymentRequest]) -> impl Iterator<Item = &PaymentRequest> {
-    reqs.iter().filter(|r| r.status == "pending" || r.status == "quorum")
+    reqs.iter()
+        .filter(|r| r.status == "pending" || r.status == "quorum")
 }
 
 fn zec(zat: i64) -> String {
@@ -133,11 +141,19 @@ async fn main() -> Result<()> {
         (Some(t), _) => t.clone(),
         (None, Some(name)) => match name.to_lowercase().as_str() {
             "alice" | "bob" | "carol" => format!("dev-token-{}", name.to_lowercase()),
-            other => return Err(anyhow!("unknown signer '{other}' (use alice|bob|carol or --token)")),
+            other => {
+                return Err(anyhow!(
+                    "unknown signer '{other}' (use alice|bob|carol or --token)"
+                ))
+            }
         },
         (None, None) => return Err(anyhow!("pass --signer <name> or --token <token>")),
     };
-    let client = Client { http: reqwest::Client::new(), server: args.server.clone(), token };
+    let client = Client {
+        http: reqwest::Client::new(),
+        server: args.server.clone(),
+        token,
+    };
 
     match args.cmd {
         Cmd::Pending => print_pending(&client.requests().await?),
@@ -150,7 +166,10 @@ async fn main() -> Result<()> {
             println!("Rejected payment #{id}.");
         }
         Cmd::Watch { interval } => {
-            println!("Watching {} for payments awaiting approval (Ctrl-C to stop)...", client.server);
+            println!(
+                "Watching {} for payments awaiting approval (Ctrl-C to stop)...",
+                client.server
+            );
             let mut seen: BTreeSet<i64> = BTreeSet::new();
             let mut first = true;
             loop {
@@ -162,7 +181,10 @@ async fn main() -> Result<()> {
                                     // On startup, show the current backlog once.
                                     println!(
                                         "· awaiting: #{} {} ZEC \"{}\" ({}/2)",
-                                        r.id, zec(r.amount_zat), r.reason, r.approvals
+                                        r.id,
+                                        zec(r.amount_zat),
+                                        r.reason,
+                                        r.approvals
                                     );
                                 } else {
                                     println!(

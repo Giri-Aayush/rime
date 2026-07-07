@@ -22,9 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use frost_core::keys::refresh::{compute_refreshing_shares, refresh_share};
-use frost_core::keys::repairable::{
-    repair_share_step_1, repair_share_step_2, repair_share_step_3,
-};
+use frost_core::keys::repairable::{repair_share_step_1, repair_share_step_2, repair_share_step_3};
 use frost_core::keys::{
     KeyPackage, PublicKeyPackage, SecretShare, VerifiableSecretSharingCommitment, VerifyingShare,
 };
@@ -34,7 +32,10 @@ use frost_core::Identifier;
 type C = reddsa::frost::redpallas::PallasBlake2b512;
 
 #[derive(Parser, Debug)]
-#[command(name = "rime-repair", about = "Repair a lost Rime signer / refresh shares")]
+#[command(
+    name = "rime-repair",
+    about = "Repair a lost Rime signer / refresh shares"
+)]
 struct Args {
     #[command(subcommand)]
     cmd: Cmd,
@@ -76,18 +77,33 @@ enum Cmd {
 
 fn main() -> Result<()> {
     match Args::parse().cmd {
-        Cmd::Repair { group, lost, helpers, lost_config, dry_run } => {
-            repair(&group, lost, &helpers, &lost_config, dry_run)
-        }
-        Cmd::Refresh { group, configs, min_signers } => refresh(&group, &configs, min_signers),
+        Cmd::Repair {
+            group,
+            lost,
+            helpers,
+            lost_config,
+            dry_run,
+        } => repair(&group, lost, &helpers, &lost_config, dry_run),
+        Cmd::Refresh {
+            group,
+            configs,
+            min_signers,
+        } => refresh(&group, &configs, min_signers),
     }
 }
 
-fn repair(group: &str, lost: u16, helpers: &[PathBuf], lost_config: &Path, dry_run: bool) -> Result<()> {
+fn repair(
+    group: &str,
+    lost: u16,
+    helpers: &[PathBuf],
+    lost_config: &Path,
+    dry_run: bool,
+) -> Result<()> {
     if helpers.len() < 2 {
         bail!("need at least 2 helpers (the signing threshold)");
     }
-    let lost_id = Identifier::<C>::try_from(lost).map_err(|e| anyhow!("bad identifier {lost}: {e}"))?;
+    let lost_id =
+        Identifier::<C>::try_from(lost).map_err(|e| anyhow!("bad identifier {lost}: {e}"))?;
 
     // Load the helpers' key packages and the group's public key package.
     let mut helper_packages: Vec<KeyPackage<C>> = Vec::new();
@@ -95,7 +111,8 @@ fn repair(group: &str, lost: u16, helpers: &[PathBuf], lost_config: &Path, dry_r
         helper_packages.push(read_key_package(path, group)?);
     }
     let pubkeys = read_public_key_package(&helpers[0], group)?;
-    let helper_ids: Vec<Identifier<C>> = helper_packages.iter().map(|kp| *kp.identifier()).collect();
+    let helper_ids: Vec<Identifier<C>> =
+        helper_packages.iter().map(|kp| *kp.identifier()).collect();
     if helper_ids.contains(&lost_id) {
         bail!("participant {lost} is listed as a helper — helpers must be the remaining signers");
     }
@@ -204,7 +221,8 @@ fn refresh(group: &str, configs: &[PathBuf], min_signers: u16) -> Result<()> {
 // ---- frost-client config plumbing ------------------------------------------
 
 fn load_doc(path: &Path) -> Result<toml::Value> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(raw.parse::<toml::Value>()?)
 }
 
@@ -255,8 +273,14 @@ fn write_atomic_owner_only(path: &Path, contents: &str) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("config");
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
     let tmp = dir.join(format!(".{name}.rime-tmp"));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
@@ -276,5 +300,10 @@ fn write_key_package(path: &Path, group: &str, kp: &KeyPackage<C>) -> Result<()>
 }
 
 fn write_public_key_package(path: &Path, group: &str, pkp: &PublicKeyPackage<C>) -> Result<()> {
-    write_group_field(path, group, "public_key_package", hex::encode(pkp.serialize()?))
+    write_group_field(
+        path,
+        group,
+        "public_key_package",
+        hex::encode(pkp.serialize()?),
+    )
 }

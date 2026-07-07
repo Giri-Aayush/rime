@@ -66,7 +66,10 @@ pub async fn run(
         .await
         .context("spawning zcash-devtool pczt create")?;
     if !out.status.success() {
-        return Err(anyhow!("pczt create failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(anyhow!(
+            "pczt create failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     tokio::fs::write(&created, &out.stdout).await?;
 
@@ -88,7 +91,9 @@ pub async fn run(
         let line = tokio::time::timeout(std::time::Duration::from_secs(60), reader.next_line())
             .await
             .context("timed out waiting for SIGHASH/randomizer from zcash-sign")??
-            .ok_or_else(|| anyhow!("zcash-sign closed stdout before printing SIGHASH/randomizer"))?;
+            .ok_or_else(|| {
+                anyhow!("zcash-sign closed stdout before printing SIGHASH/randomizer")
+            })?;
         hexes.extend(hex_tokens(&line, 64));
     }
     let (sighash, randomizer) = (hexes[0].clone(), hexes[1].clone());
@@ -97,10 +102,16 @@ pub async fn run(
     // 3. FROST ceremony through frostd -------------------------------------
     progress(
         "ceremony.start",
-        &format!("2-of-3 ceremony: {} + {}", approvers[0].name, approvers[1].name),
+        &format!(
+            "2-of-3 ceremony: {} + {}",
+            approvers[0].name, approvers[1].name
+        ),
     );
     let signature = ceremony(cfg, &sighash, &randomizer, approvers, progress).await?;
-    progress("ceremony.signed", &format!("aggregate signature {}", &signature[..16]));
+    progress(
+        "ceremony.signed",
+        &format!("aggregate signature {}", &signature[..16]),
+    );
 
     // 4. Hand the signature back to zcash-sign -----------------------------
     let mut stdin = zsign.stdin.take().expect("piped");
@@ -114,15 +125,33 @@ pub async fn run(
 
     // 5. Prove, combine, broadcast -----------------------------------------
     progress("pczt.prove", "computing zero-knowledge proof");
-    pipe_file_cmd("zcash-devtool", &["pczt", "-w", &cfg.wallet_dir, "prove"], &created, &proven).await?;
+    pipe_file_cmd(
+        "zcash-devtool",
+        &["pczt", "-w", &cfg.wallet_dir, "prove"],
+        &created,
+        &proven,
+    )
+    .await?;
     progress("pczt.combine", "combining signed + proven");
     let out = Command::new("zcash-devtool")
-        .args(["pczt", "-w", &cfg.wallet_dir, "combine", "-i", &signed, "-i", &proven])
+        .args([
+            "pczt",
+            "-w",
+            &cfg.wallet_dir,
+            "combine",
+            "-i",
+            &signed,
+            "-i",
+            &proven,
+        ])
         .stderr(Stdio::piped())
         .output()
         .await?;
     if !out.status.success() {
-        return Err(anyhow!("pczt combine failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(anyhow!(
+            "pczt combine failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     tokio::fs::write(&finalp, &out.stdout).await?;
 
@@ -134,7 +163,11 @@ pub async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    send.stdin.take().expect("piped").write_all(&final_bytes).await?;
+    send.stdin
+        .take()
+        .expect("piped")
+        .write_all(&final_bytes)
+        .await?;
     let out = send.wait_with_output().await?;
     let combined = format!(
         "{}\n{}",
@@ -242,7 +275,10 @@ async fn pipe_file_cmd(bin: &str, args: &[&str], input: &str, output: &str) -> a
     child.stdin.take().expect("piped").write_all(&inp).await?;
     let out = child.wait_with_output().await?;
     if !out.status.success() {
-        return Err(anyhow!("{bin} {args:?} failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(anyhow!(
+            "{bin} {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     tokio::fs::write(output, &out.stdout).await?;
     Ok(())

@@ -64,3 +64,17 @@ Ranked by severity. These are either architectural (change error/behavior semant
 - Manual call-site tracing for dead *parameters* and dead *branches* (which the compiler can't flag)
 - Per-symbol reference counting for unused exports; per-dependency import counting for dead deps
 - Wiring checks (Dockerfile/Makefile/compose/scripts) to distinguish dead binaries from live ones
+
+---
+
+## Part 3 — Resolution (addressed after the review)
+
+| Item | Status | What was done |
+|------|--------|---------------|
+| **H1** Zero tests | ✅ Done | 6 in-process API tests (`oneshot`, no socket/tools): reads need a token; quorum fires **exactly once** on a late third approval; reject → `rejected`; mark-lost threshold guard + token revocation; repair needs config + lost target; SSE needs auth + rejects bad tickets. `build_app(state)` extracted for testability. |
+| **H2** `Arc<Mutex<Connection>>` poisoning | ✅ Stopgap | Swapped the DB mutex to `parking_lot::Mutex` — no poisoning, and a held guard across `.await` still won't compile. Pool (`deadpool`/`r2d2`) remains the production step. |
+| **M1** `unwrap`/`expect` in `spawn_ceremony` | ✅ Done | The gather is now a fallible closure; a missing/malformed row routes the request through the existing `status = 'failed'` path instead of panicking the task and stranding it. |
+| **M2** test-support dev-deps unused | ✅ Resolved | `tower` + `http-body-util` are now used by the H1 tests. |
+| **M4** No CI | ✅ Done | `.github/workflows/ci.yml`: `cargo fmt --check`, `clippy -D warnings`, `cargo test`, plus frontend `tsc --noEmit` + `next build`. Workspace formatted so the fmt gate is green. |
+| **L1** String-interpolated SQL | ✅ Done | `seed_signers` DELETE now binds parameters (`params_from_iter`) instead of joining ids into the query. |
+| **M3** Two parallel UIs | ⏸ By design | `web/` stays as the documented no-build fallback (served only when `frontend/out/` is absent). Kept intentionally, per the review. |
